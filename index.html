@@ -177,6 +177,7 @@
           { id:"histo", label:"Histograma", c:"#F2E8D8" },
           { id:"parte", label:"Parte diario", c:"#D9F0E6" },
           { id:"informe", label:"Informe de cierre", c:"#F7ECDA" },
+          { id:"informe_periodo", label:"Informe por período", c:"#F7ECDA" },
           { id:"costos", label:"Tablero", c:"#EDE9F6" },
           { id:"traslados", label:"Traslados", c:"#F5E9F7" },
           { id:"hue_actividad", label:"Actividad", c:"#EDEBE4", esAdmin:true }
@@ -513,6 +514,7 @@
         else if (tab === "histo") renderHisto();
         else if (tab === "parte") renderParte();
         else if (tab === "informe") renderInforme();
+        else if (tab === "informe_periodo") renderInformePeriodo();
         else if (tab === "costos") renderTablero();
       }
     }
@@ -4209,6 +4211,67 @@
       cambiarTab("detalle");
     }
 
+    // ===================== INFORME POR PERÍODO (global la_huella) =====================
+    // Indicadores de asistencia y horas de toda la sede en un rango de fechas.
+    let infpDesde=null, infpHasta=null;
+    function setInfpFecha(cual,val){ if(cual==='d') infpDesde=val||null; else infpHasta=val||null; renderInformePeriodo(); }
+    function renderInformePeriodo(){
+      const hoy = fechaStr(new Date());
+      if(!infpHasta) infpHasta = hoy;
+      if(!infpDesde) infpDesde = hoy.slice(0,8)+'01'; // 1° del mes actual
+      const d0=infpDesde, d1=infpHasta;
+      const N = x => Number(x)||0;
+      const nomP = id => nombrePersona(id) || '—';
+      const filas = detalle.filter(f => f.sede==='la_huella' && f.fecha>=d0 && f.fecha<=d1);
+      const prog = filas.length;                       // jornadas planificadas (persona-día)
+      const aus  = filas.filter(f=>f.ausente);
+      const trab = filas.filter(f=>!f.ausente);
+      const tipoAus = (pid,fch)=>{ const nd=dispo.find(x=>x.persona_id===pid && fch>=x.desde && fch<=x.hasta); return nd? nd.tipo : 'Sin especificar'; };
+      const persAus={}, persHrs={}, persExtra={}, porTipo={}, porEst={}, porProy={};
+      aus.forEach(f=>{ persAus[f.persona_real]=(persAus[f.persona_real]||0)+1; const t=tipoAus(f.persona_real,f.fecha); porTipo[t]=(porTipo[t]||0)+1; });
+      trab.forEach(f=>{ const p=f.persona_real, hn=N(f.horas_normales), he=N(f.horas_extra);
+        persHrs[p]=(persHrs[p]||0)+hn+he; persExtra[p]=(persExtra[p]||0)+he;
+        const est=f.estacion_real===SUP_MARK?'Supervisión':(f.estacion_real||'—'); porEst[est]=(porEst[est]||0)+hn+he;
+        if(f.proyecto_id) porProy[f.proyecto_id]=(porProy[f.proyecto_id]||0)+hn+he;
+      });
+      const tasa = prog? Math.round(100*aus.length/prog) : 0;
+      const totHrs = trab.reduce((s,f)=>s+N(f.horas_normales)+N(f.horas_extra),0);
+      const totExtra = trab.reduce((s,f)=>s+N(f.horas_extra),0);
+      const h1 = n => (Math.round(n*10)/10).toLocaleString('es-AR');
+      const tabla = (titulo, obj, fmtKey, fmtVal, extraCol) => {
+        const rows = Object.entries(obj).sort((a,b)=>b[1]-a[1]);
+        if(!rows.length) return '<div style="font-size:12.5px;color:#A8A69E;padding:8px 0">'+titulo+': sin datos en el período.</div>';
+        return '<div style="margin-top:14px"><div style="font-size:13px;font-weight:600;color:#4A3F7A;margin-bottom:4px">'+titulo+'</div>'
+          + '<table><thead><tr><th>'+(extraCol?extraCol[0]:'—')+'</th>'+(extraCol?'<th>'+extraCol[1]+'</th>':'')+'<th class="r">'+(extraCol?extraCol[2]:'Valor')+'</th></tr></thead><tbody>'
+          + rows.map(([k,v])=> '<tr><td>'+fmtKey(k)+'</td>'+(extraCol?'<td>'+(extraCol[3]?extraCol[3](k):'')+'</td>':'')+'<td class="r">'+fmtVal(v)+'</td></tr>').join('')
+          + '</tbody></table></div>';
+      };
+
+      let h = '<div class="no-print" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px">';
+      h += '<label style="font-size:12px;color:#888780">Desde<br><input type="date" value="'+d0+'" onchange="setInfpFecha(\'d\',this.value)" style="margin-top:3px"></label>';
+      h += '<label style="font-size:12px;color:#888780">Hasta<br><input type="date" value="'+d1+'" onchange="setInfpFecha(\'h\',this.value)" style="margin-top:3px"></label>';
+      h += (typeof botonesExport==='function'? botonesExport('infp-print','informe_periodo') : '') + '</div>';
+      h += '<div id="infp-print">';
+      h += '<div style="font-size:12px;color:#888780;margin-bottom:10px">Período '+dmy(d0)+' – '+dmy(d1)+' · Base La Huella</div>';
+      // KPIs
+      h += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px">';
+      const kpi=(lbl,val,col)=>'<div style="flex:1;min-width:150px;background:#FAF9F4;border:1px solid #EEE;border-radius:10px;padding:12px 14px"><div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.06em">'+lbl+'</div><div style="font-size:22px;font-weight:700;color:'+(col||'#37342E')+'">'+val+'</div></div>';
+      h += kpi('Jornadas planificadas', prog.toLocaleString('es-AR'));
+      h += kpi('Días de ausencia', aus.length.toLocaleString('es-AR'), aus.length?'#B0584F':'#37342E');
+      h += kpi('Tasa de ausentismo', tasa+'%', tasa>10?'#B0584F':'#3B6D11');
+      h += kpi('Horas trabajadas', h1(totHrs));
+      h += kpi('Horas extra', h1(totExtra), totExtra?'#BA7517':'#37342E');
+      h += '</div>';
+      // Tablas
+      h += tabla('Ausencias por persona', persAus, nomP, v=>v+' día(s)', ['Persona','Motivo (último)','Días', k=>tipoAus(k, (aus.find(f=>f.persona_real===k)||{}).fecha)]);
+      h += tabla('Ausencias por tipo', porTipo, k=>k, v=>v+' día(s)');
+      h += tabla('Horas trabajadas por persona', persHrs, nomP, h1);
+      h += tabla('Horas extra por persona', persExtra, nomP, h1);
+      h += tabla('Horas por estación', porEst, k=>k, h1);
+      h += tabla('Horas por proyecto', porProy, k=>(nombreProy(k)||'—'), h1);
+      h += '</div>';
+      contenido.innerHTML = h;
+    }
     function renderInforme() {
       const proySel = informeProy || (proyectos[0] && proyectos[0].id) || "";
       let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:14px">';
