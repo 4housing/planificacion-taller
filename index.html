@@ -177,7 +177,6 @@
           { id:"histo", label:"Histograma", c:"#F2E8D8" },
           { id:"parte", label:"Parte diario", c:"#D9F0E6" },
           { id:"informe", label:"Informe de cierre", c:"#F7ECDA" },
-          { id:"informe_periodo", label:"Informe por período", c:"#F7ECDA" },
           { id:"costos", label:"Tablero", c:"#EDE9F6" },
           { id:"traslados", label:"Traslados", c:"#F5E9F7" },
           { id:"hue_actividad", label:"Actividad", c:"#EDEBE4", esAdmin:true }
@@ -197,6 +196,7 @@
           { id:"nqn_histo", label:"Histograma", c:"#F2E8D8" },
           { id:"nqn_parte", label:"Parte diario", c:"#D9F0E6" },
           { id:"nqn_stock", label:"Stock", c:"#FAEEDA" },
+          { id:"nqn_informe", label:"Informe por período", c:"#F7ECDA" },
           { id:"personal", label:"Personal", c:"#FBEAF0" },
           { id:"nqn_actividad", label:"Actividad", c:"#EDEBE4", esAdmin:true }
         ]
@@ -404,6 +404,15 @@
         renderDetalleNqn();
         return;
       }
+      if (tab === "nqn_informe") {
+        if (!personas.length) { const { data } = await sb.from("planificacion_personal").select("*"); personas = (data||[]).sort((a,b)=>{if(a.tipo!==b.tipo)return a.tipo==="Directo"?-1:1;return (parseInt(a.legajo)||9999)-(parseInt(b.legajo)||9999);}); }
+        { const { data } = await sb.from("planificacion_trailers").select("*").eq("sede","neuquen"); trailers = (data||[]).sort((a,b)=> (a.codigo||"").localeCompare(b.codigo||"", "es", {numeric:true})); }
+        { const { data } = await sb.from("planificacion_no_disponibilidad").select("*"); dispo = data || []; }
+        { const { data, error } = await sb.from("planificacion_detalle_diario").select("*").eq("sede","neuquen"); if (error) return errLoad(error); detalle = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0); }
+        setEstado("✓ Datos cargados.", "ok");
+        renderInformePeriodo();
+        return;
+      }
       if (tab === "nqn_gantt" || tab === "nqn_histo") {
         if (!personas.length) { const { data } = await sb.from("planificacion_personal").select("*"); personas = (data||[]).sort((a,b)=>{if(a.tipo!==b.tipo)return a.tipo==="Directo"?-1:1;return (parseInt(a.legajo)||9999)-(parseInt(b.legajo)||9999);}); }
         { const { data } = await sb.from("planificacion_trailers").select("*").eq("sede","neuquen"); trailers = (data||[]).sort((a,b)=> (a.codigo||"").localeCompare(b.codigo||"", "es", {numeric:true})); }
@@ -514,7 +523,6 @@
         else if (tab === "histo") renderHisto();
         else if (tab === "parte") renderParte();
         else if (tab === "informe") renderInforme();
-        else if (tab === "informe_periodo") renderInformePeriodo();
         else if (tab === "costos") renderTablero();
       }
     }
@@ -4222,17 +4230,19 @@
       const d0=infpDesde, d1=infpHasta;
       const N = x => Number(x)||0;
       const nomP = id => nombrePersona(id) || '—';
-      const filas = detalle.filter(f => f.sede==='la_huella' && f.fecha>=d0 && f.fecha<=d1);
+      const esNqn = (SEDE==='neuquen');
+      const filas = detalle.filter(f => f.sede===SEDE && f.fecha>=d0 && f.fecha<=d1);
       const prog = filas.length;                       // jornadas planificadas (persona-día)
       const aus  = filas.filter(f=>f.ausente);
       const trab = filas.filter(f=>!f.ausente);
       const tipoAus = (pid,fch)=>{ const nd=dispo.find(x=>x.persona_id===pid && fch>=x.desde && fch<=x.hasta); return nd? nd.tipo : 'Sin especificar'; };
-      const persAus={}, persHrs={}, persExtra={}, porTipo={}, porEst={}, porProy={};
+      const persAus={}, persHrs={}, persExtra={}, porTipo={}, porEst={}, porProy={}, porTrailer={};
       aus.forEach(f=>{ persAus[f.persona_real]=(persAus[f.persona_real]||0)+1; const t=tipoAus(f.persona_real,f.fecha); porTipo[t]=(porTipo[t]||0)+1; });
       trab.forEach(f=>{ const p=f.persona_real, hn=N(f.horas_normales), he=N(f.horas_extra);
         persHrs[p]=(persHrs[p]||0)+hn+he; persExtra[p]=(persExtra[p]||0)+he;
         const est=f.estacion_real===SUP_MARK?'Supervisión':(f.estacion_real||'—'); porEst[est]=(porEst[est]||0)+hn+he;
         if(f.proyecto_id) porProy[f.proyecto_id]=(porProy[f.proyecto_id]||0)+hn+he;
+        if(f.trailer_id) porTrailer[f.trailer_id]=(porTrailer[f.trailer_id]||0)+hn+he;
       });
       const tasa = prog? Math.round(100*aus.length/prog) : 0;
       const totHrs = trab.reduce((s,f)=>s+N(f.horas_normales)+N(f.horas_extra),0);
@@ -4252,7 +4262,7 @@
       h += '<label style="font-size:12px;color:#888780">Hasta<br><input type="date" value="'+d1+'" onchange="setInfpFecha(\'h\',this.value)" style="margin-top:3px"></label>';
       h += (typeof botonesExport==='function'? botonesExport('infp-print','informe_periodo') : '') + '</div>';
       h += '<div id="infp-print">';
-      h += '<div style="font-size:12px;color:#888780;margin-bottom:10px">Período '+dmy(d0)+' – '+dmy(d1)+' · Base La Huella</div>';
+      h += '<div style="font-size:12px;color:#888780;margin-bottom:10px">Período '+dmy(d0)+' – '+dmy(d1)+' · '+(esNqn?'Base Neuquén':'Base La Huella')+'</div>';
       // KPIs
       h += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px">';
       const kpi=(lbl,val,col)=>'<div style="flex:1;min-width:150px;background:#FAF9F4;border:1px solid #EEE;border-radius:10px;padding:12px 14px"><div style="font-size:11px;color:#888780;text-transform:uppercase;letter-spacing:.06em">'+lbl+'</div><div style="font-size:22px;font-weight:700;color:'+(col||'#37342E')+'">'+val+'</div></div>';
@@ -4267,8 +4277,13 @@
       h += tabla('Ausencias por tipo', porTipo, k=>k, v=>v+' día(s)');
       h += tabla('Horas trabajadas por persona', persHrs, nomP, h1);
       h += tabla('Horas extra por persona', persExtra, nomP, h1);
-      h += tabla('Horas por estación', porEst, k=>k, h1);
-      h += tabla('Horas por proyecto', porProy, k=>(nombreProy(k)||'—'), h1);
+      if(esNqn){
+        h += tabla('Horas por tarea de mantenimiento', porEst, k=>k, h1);
+        h += tabla('Horas por trailer', porTrailer, k=>nombreTrailer(k), h1);
+      } else {
+        h += tabla('Horas por estación', porEst, k=>k, h1);
+        h += tabla('Horas por proyecto', porProy, k=>(nombreProy(k)||'—'), h1);
+      }
       h += '</div>';
       contenido.innerHTML = h;
     }
