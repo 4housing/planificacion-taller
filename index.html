@@ -1298,7 +1298,7 @@
     /* ---- MANTENIMIENTO (Base Neuquén) ---- */
     function nombreTrailer(id){ const t=trailers.find(x=>x.id===id); if(!t) return "(sin trailer)"; const extra = t.alias || [t.tipo,t.medida].filter(Boolean).join(" "); return (t.codigo||"(sin código)")+(extra?(" · "+extra):""); }
     // Representación de trailer por número de IF (en vez de código/serie), para el flujo de vales.
-    function repTrailerIf(t){ if(!t) return "(sin trailer)"; const extra = t.alias || [t.tipo,t.medida].filter(Boolean).join(" "); return (t.if_codigo||"(sin IF)")+(extra?(" · "+extra):""); }
+    function repTrailerIf(t){ if(!t) return "(sin trailer)"; const extra = t.alias || [t.tipo,t.medida].filter(Boolean).join(" "); const ref = t.if_codigo || t.codigo || "(sin ref.)"; return ref+(extra?(" · "+extra):""); }
     function nombreTrailerIf(id){ return repTrailerIf(trailers.find(x=>x.id===id)); }
     // Etiqueta corta de un trailer por IF + Tipo (sin el código de contenedor). Usada en Gantt, Histograma, Parte, filtros.
     function trailerIfTipo(t){ if(!t) return "(sin trailer)"; const iff = t.if_codigo || "(sin IF)"; const tipo = (t.tipo||"").trim(); return tipo ? (iff+" · "+tipo) : iff; }
