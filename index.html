@@ -282,7 +282,12 @@
     let stockItems = [];           // catálogo de ítems de stock (Neuquén)
     let stockFiltroFam = "";       // filtro por familia
     let stockSoloBajos = false;    // mostrar solo ítems bajo mínimo
+    let stockBusqueda = "";        // búsqueda por nombre/código en el catálogo
+    let stockOrdenDesc = "";       // orden por descripción: "" (por defecto) | "asc" | "desc"
     let stockSub = "items";        // sub-vista de la pestaña stock: "items" | "movs"
+    // Id de input a re-enfocar después de un re-render (para no perder foco al tipear en búsquedas).
+    let _focusRestore = null;
+    function restoreFocus(){ if(!_focusRestore) return; const el=document.getElementById(_focusRestore); _focusRestore=null; if(el){ el.focus(); if(el.setSelectionRange){ try{ const n=el.value.length; el.setSelectionRange(n,n); }catch(e){} } } }
     let actividadLog = [];         // registros del log de actividad (solo admin lo carga/ve)
     let stockMovs = [];            // historial de vales (cabeceras)
     let stockMovDet = {};          // movId -> { items:[{...renglón, repartos:[...]}] }
@@ -1672,6 +1677,9 @@
       let lista = stockItems.slice();
       if (stockFiltroFam) lista = lista.filter(i=> (i.familia||"")===stockFiltroFam);
       if (stockSoloBajos) lista = lista.filter(bajoMinimo);
+      if (stockBusqueda.trim()){ const q=stockBusqueda.trim().toLowerCase(); lista = lista.filter(i=> ((i.descripcion||"")+" "+(i.codigo||"")).toLowerCase().includes(q)); }
+      if (stockOrdenDesc==="asc")  lista.sort((a,b)=> (a.descripcion||"").localeCompare(b.descripcion||"","es",{numeric:true}));
+      else if (stockOrdenDesc==="desc") lista.sort((a,b)=> (b.descripcion||"").localeCompare(a.descripcion||"","es",{numeric:true}));
 
       const totalValor = stockItems.reduce((a,i)=> a + (Number(i.cantidad)||0)*(Number(i.costo)||0), 0);
       const nBajos = stockItems.filter(bajoMinimo).length;
@@ -1686,11 +1694,14 @@
       h += '<div style="background:#F1EFE8;border-radius:10px;padding:7px 12px;font-size:12px"><b>'+stockItems.length+'</b> ítems</div>';
       h += '<div style="background:'+(nBajos?'#FBEAF0':'#E8F3DE')+';border-radius:10px;padding:7px 12px;font-size:12px;color:'+(nBajos?'#993556':'#3B6D11')+'"><b>'+nBajos+'</b> bajo mínimo</div>';
       h += '<div style="background:#F1EFE8;border-radius:10px;padding:7px 12px;font-size:12px">Valorizado: <b>'+fmtMoneda(totalValor)+'</b></div>';
-      h += '<select onchange="stockFiltroFam=this.value;renderStock()" style="width:auto;margin-left:auto"><option value="">Todas las familias</option>'+fams.map(f=>'<option value="'+f.replace(/"/g,'&quot;')+'" '+(f===stockFiltroFam?'selected':'')+'>'+f+'</option>').join('')+'</select>';
+      h += '<input id="stk-buscar" type="text" value="'+stockBusqueda.replace(/"/g,'&quot;')+'" placeholder="🔍 Buscar por nombre o código" oninput="buscarStock(this.value)" style="width:auto;min-width:240px;margin-left:auto">';
+      if(stockBusqueda.trim()) h += '<button class="btn btn-sec btn-sm" onclick="buscarStock(\'\')" title="Limpiar búsqueda">✕</button>';
+      h += '<select onchange="stockFiltroFam=this.value;renderStock()" style="width:auto"><option value="">Todas las familias</option>'+fams.map(f=>'<option value="'+f.replace(/"/g,'&quot;')+'" '+(f===stockFiltroFam?'selected':'')+'>'+f+'</option>').join('')+'</select>';
       h += '<label style="font-size:12px;color:#888780;display:flex;align-items:center;gap:5px"><input type="checkbox" '+(stockSoloBajos?'checked':'')+' onchange="stockSoloBajos=this.checked;renderStock()" style="width:auto">Solo bajo mínimo</label>';
       h += '</div>';
 
-      h += '<table><thead><tr><th>Familia</th><th>Código</th><th>Descripción</th><th>Unidad</th><th style="text-align:right">Cantidad</th><th style="text-align:right">Mínimo</th><th style="text-align:right">Costo unit.</th><th></th></tr></thead><tbody>';
+      const flechaDesc = stockOrdenDesc==="asc" ? " ▲" : stockOrdenDesc==="desc" ? " ▼" : " ⇅";
+      h += '<table><thead><tr><th>Familia</th><th>Código</th><th style="cursor:pointer;user-select:none" onclick="ordenarStockDesc()" title="Ordenar alfabéticamente por descripción">Descripción<span class="no-print" style="color:#993556;font-size:11px">'+flechaDesc+'</span></th><th>Unidad</th><th style="text-align:right">Cantidad</th><th style="text-align:right">Mínimo</th><th style="text-align:right">Costo unit.</th><th></th></tr></thead><tbody>';
       if(!lista.length) h += '<tr><td colspan="8" style="color:#A8A69E;padding:14px">'+(stockItems.length?'Ningún ítem coincide con el filtro.':'Sin ítems cargados. Agregá uno abajo o importá el Excel (Etapa 6).')+'</td></tr>';
       lista.forEach(i=>{
         const bajo = bajoMinimo(i);
@@ -1709,7 +1720,10 @@
       });
       h += '</tbody></table></div><div class="row-actions no-print"><button class="btn-add" onclick="agregarStk()">+ Agregar ítem</button><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
       contenido.innerHTML = h;
+      restoreFocus();
     }
+    function buscarStock(v){ stockBusqueda = v; _focusRestore = "stk-buscar"; renderStock(); }
+    function ordenarStockDesc(){ stockOrdenDesc = stockOrdenDesc==="" ? "asc" : stockOrdenDesc==="asc" ? "desc" : ""; renderStock(); }
     async function agregarStk(){ const{error}=await sb.from("planificacion_stock_items").insert({ sede:"neuquen", familia:stockFiltroFam||"", codigo:"", descripcion:"", unidad:"", cantidad:0, minimo:0 }); if(error)return setEstado("Error: "+error.message,"err"); registrarLog("crear","stock","Nuevo ítem de stock"); cargar(); }
     async function editarStk(id,c,v){
       let val = v;
@@ -1738,7 +1752,7 @@
       }
       // ----- Historial -----
       h += '<h3 style="margin:14px 0 8px;font-size:14px">Historial de vales</h3>';
-      if(!stockMovs.length){ h += '<p style="color:#A8A69E;font-size:13px">Sin movimientos registrados.</p>'; contenido.innerHTML=h; return; }
+      if(!stockMovs.length){ h += '<p style="color:#A8A69E;font-size:13px">Sin movimientos registrados.</p>'; contenido.innerHTML=h; restoreFocus(); return; }
       stockMovs.forEach(m=>{
         const det = stockMovDet[m.id] || {items:[]};
         const esEnt = m.tipo==="entrada";
@@ -1756,6 +1770,7 @@
         h += '</tbody></table></div>';
       });
       contenido.innerHTML = h;
+      restoreFocus();
     }
 
     function nuevoVale(tipo){ valeDraft = { tipo:tipo, fecha:fechaStr(new Date()), responsable:"", notas:"", lineas:[ nuevaLineaDraft() ] }; renderStockMovs(); }
@@ -1773,8 +1788,12 @@
       valeDraft.lineas.forEach((ln,idx)=>{
         const it = itemPorId(ln.item_id);
         const disp = it? Number(it.cantidad) : null;
-        const optItems = '<option value="">(elegir material)</option>'+stockItems.map(i=>'<option value="'+i.id+'" '+(i.id===ln.item_id?'selected':'')+'>'+(i.codigo?i.codigo+" · ":"")+(i.descripcion||"(sin desc.)")+(i.unidad?" ("+i.unidad+")":"")+'</option>').join('');
+        const q = (ln._q||"").trim().toLowerCase();
+        let opts = stockItems.slice().sort((a,b)=> (a.descripcion||"").localeCompare(b.descripcion||"","es",{numeric:true}) || (a.codigo||"").localeCompare(b.codigo||"","es",{numeric:true}));
+        if(q) opts = opts.filter(i=> i.id===ln.item_id || ((i.descripcion||"")+" "+(i.codigo||"")).toLowerCase().includes(q));
+        const optItems = '<option value="">(elegir material)</option>'+opts.map(i=>'<option value="'+i.id+'" '+(i.id===ln.item_id?'selected':'')+'>'+(i.codigo?i.codigo+" · ":"")+(i.descripcion||"(sin desc.)")+(i.unidad?" ("+i.unidad+")":"")+'</option>').join('');
         h += '<div style="border:1px solid #EEEce4;border-radius:8px;padding:10px;margin-bottom:8px">';
+        h += '<div class="pl-row" style="margin-bottom:6px"><input id="vale-q-'+idx+'" type="text" value="'+(ln._q||"").replace(/"/g,'&quot;')+'" placeholder="🔍 buscar material por nombre o código" oninput="setLineaBusqueda('+idx+',this.value)" style="flex:1;min-width:200px"></div>';
         h += '<div class="pl-row"><select onchange="setLinea('+idx+',\'item_id\',this.value)" style="flex:1;min-width:200px">'+optItems+'</select>'
           + '<input type="number" step="any" min="0" value="'+ln.cantidad+'" placeholder="cant." onchange="setLinea('+idx+',\'cantidad\',this.value)" style="width:90px;text-align:right">'
           + (it?'<span style="font-size:11px;color:'+(disp!=null?'#888780':'#A8A69E')+'">disp: '+fmtNum(disp)+(it.unidad?" "+it.unidad:"")+'</span>':'')
@@ -1804,6 +1823,7 @@
     }
     // edición del borrador
     function setLinea(idx,c,v){ valeDraft.lineas[idx][c]=v; renderStockMovs(); }
+    function setLineaBusqueda(idx,v){ valeDraft.lineas[idx]._q=v; _focusRestore="vale-q-"+idx; renderStockMovs(); }
     function agregarLinea(){ valeDraft.lineas.push(nuevaLineaDraft()); renderStockMovs(); }
     function quitarLinea(idx){ valeDraft.lineas.splice(idx,1); if(!valeDraft.lineas.length) valeDraft.lineas.push(nuevaLineaDraft()); renderStockMovs(); }
     function agregarReparto(idx){ valeDraft.lineas[idx].repartos.push({ trailer_id:"", cantidad:"" }); renderStockMovs(); }
