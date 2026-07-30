@@ -453,7 +453,7 @@
           renderStockMovs();
           return;
         }
-        const bajos = stockItems.filter(i=> Number(i.cantidad) <= Number(i.minimo)).length;
+        const bajos = stockItems.filter(i=> Number(i.cantidad) < Number(i.minimo)).length;
         setEstado("\u2713 " + stockItems.length + " ítem(s)" + (bajos?(" · "+bajos+" bajo mínimo"):"") + ".", bajos?"err":"ok");
         renderStock();
         return;
@@ -1652,7 +1652,7 @@
 
     /* ---- STOCK (Base Neuquén) — catálogo de ítems ---- */
     function familiasStock(){ const s=new Set(); stockItems.forEach(i=>{ if(i.familia) s.add(i.familia); }); return [...s].sort((a,b)=>a.localeCompare(b,"es")); }
-    function bajoMinimo(i){ return Number(i.cantidad) <= Number(i.minimo); }
+    function bajoMinimo(i){ return Number(i.cantidad) < Number(i.minimo); }
     function fmtNum(n){ if(n==null||n==="") return ""; const x=Number(n); return Number.isInteger(x)? String(x) : x.toFixed(2); }
     function fmtMoneda(n){ if(n==null||n==="") return ""; return "$" + Number(n).toLocaleString("es-AR",{minimumFractionDigits:2,maximumFractionDigits:2}); }
     // Exporta el catálogo de stock a CSV (abrible en Excel). Respeta el filtro de familia activo.
