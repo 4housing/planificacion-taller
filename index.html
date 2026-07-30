@@ -1783,8 +1783,14 @@
       const col = esEnt? "#3B6D11":"#993556";
       let h = '<div class="card" style="border-color:'+col+';border-width:2px">';
       h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span style="background:'+(esEnt?'#E8F3DE':'#FBEAF0')+';color:'+col+';padding:3px 10px;border-radius:6px;font-weight:700;font-size:13px">Nuevo vale · '+(esEnt?"ENTRADA":"SALIDA")+'</span></div>';
+      // Responsable: desplegable con el personal de Neuquén (cargado por Planificación) + Leandro Chinni.
+      const respNombres = personasDe("neuquen").map(p=>p.nombre).filter(Boolean);
+      if(!respNombres.some(n=>(n||"").trim().toLowerCase()==="leandro chinni")) respNombres.push("Leandro Chinni");
+      respNombres.sort((a,b)=>a.localeCompare(b,"es"));
+      if(valeDraft.responsable && !respNombres.includes(valeDraft.responsable)) respNombres.unshift(valeDraft.responsable);
+      const optResp = '<option value="">(elegir responsable)</option>'+respNombres.map(n=>'<option value="'+n.replace(/"/g,'&quot;')+'" '+(n===valeDraft.responsable?'selected':'')+'>'+n.replace(/</g,'&lt;')+'</option>').join('');
       h += '<div class="pl-row"><label style="font-size:11.5px;color:#888780">Fecha<br><input type="date" value="'+valeDraft.fecha+'" onchange="valeDraft.fecha=this.value" style="margin-top:3px"></label>'
-        + '<label style="font-size:11.5px;color:#888780;flex:1">Responsable<br><input value="'+valeDraft.responsable.replace(/"/g,'&quot;')+'" placeholder="quién retira/ingresa" onchange="valeDraft.responsable=this.value" style="margin-top:3px;width:100%"></label></div>';
+        + '<label style="font-size:11.5px;color:#888780;flex:1">Responsable<br><select onchange="valeDraft.responsable=this.value" style="margin-top:3px;width:100%">'+optResp+'</select></label></div>';
       h += '<div class="pl-row"><label style="font-size:11.5px;color:#888780;flex:1">Notas<br><input value="'+valeDraft.notas.replace(/"/g,'&quot;')+'" placeholder="opcional" onchange="valeDraft.notas=this.value" style="margin-top:3px;width:100%"></label></div>';
 
       h += '<div style="font-size:12px;color:#888780;margin:10px 0 4px;font-weight:600">Materiales</div>';
