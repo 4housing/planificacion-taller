@@ -423,6 +423,7 @@
         { const { data } = await sb.from("planificacion_trailers").select("*").eq("sede","neuquen"); trailers = (data||[]).sort((a,b)=> (a.codigo||"").localeCompare(b.codigo||"", "es", {numeric:true})); }
         { const { data } = await sb.from("planificacion_feriados").select("*"); feriados = data || []; }
         { const { data } = await sb.from("planificacion_mant_tareas").select("*").eq("sede","neuquen"); mantTareas = data || []; }
+        { const { data } = await sb.from("planificacion_no_disponibilidad").select("*"); dispo = data || []; }
         { const { data } = await sb.from("planificacion_detalle_diario").select("*").eq("sede","neuquen"); detalle = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0); }
         setEstado("\u2713 Datos cargados.", "ok");
         if (tab === "nqn_gantt") renderGanttNqn(); else renderHistoNqn();
@@ -2142,6 +2143,9 @@
 
     function noDispoEn(personaId, fecha) { return dispo.some(n => n.persona_id === personaId && fecha >= n.desde && fecha <= n.hasta); }
     function tipoNoDispoEn(personaId, fecha) { const n = dispo.find(x => x.persona_id === personaId && fecha >= x.desde && fecha <= x.hasta); return n ? n.tipo : null; }
+    // Chip para una celda de histograma cuando la persona NO está disponible ese día
+    // (vacaciones, licencia, etc). Ámbar, distinto del rojo de "Ausente" no planificado.
+    function chipNoDispo(tipo){ const lbl = String(tipo || "No disp."); return '<span style="display:inline-block;width:100%;background:#FBF0DE;color:#8A5410;border-radius:5px;padding:3px 1px;font-size:8.5px" title="No disponible: '+lbl.replace(/"/g,"&quot;")+'">'+lbl.slice(0,8)+'</span>'; }
 
     function validarCobertura() {
       // rango total de fechas planificadas
@@ -2464,7 +2468,7 @@
         const gente = planiPers[b.id] || [];
         const subsSel = (b.subtarea||"").split(",").map(s=>s.trim()).filter(Boolean);
         return '<div style="padding:14px;border-top:1px solid #EEECE4">'
-          + '<div class="pl-row" style="margin-bottom:8px"><span style="font-size:11px;color:#A8A69E;margin-right:4px">Proyecto:</span><select onchange="editarPl(\''+b.id+'\',\'proyecto_id\',this.value)" style="min-width:160px">'+proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===b.proyecto_id?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></div>'
+          + '<div class="pl-row" style="margin-bottom:8px"><span style="font-size:11px;color:#A8A69E;margin-right:4px">Proyecto:</span><select onchange="editarPl(\''+b.id+'\',\'proyecto_id\',this.value)" style="min-width:160px"><option value="" '+(!b.proyecto_id?'selected':'')+'>(sin proyecto — asignar)</option>'+proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===b.proyecto_id?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></div>'
           + '<div style="margin:2px 0 8px"><div style="font-size:11px;color:#A8A69E;margin-bottom:4px">Tareas (tildá una o varias):</div><div class="chips">'+st.subs.map(s=>{const on=subsSel.includes(s);return '<button class="chip'+(on?' on':'')+'" onclick="toggleSub(\''+b.id+'\',\''+s.replace(/'/g,"\\\\'")+'\','+(on?'true':'false')+')">'+s+'</button>';}).join('')+'</div></div>'
           + (function(){ const mods=modulosDeProy(b.proyecto_id); const sel=(b.modulos||"").split(",").map(s=>s.trim()).filter(Boolean); let m='<div style="margin:2px 0 8px"><div style="font-size:11px;color:#A8A69E;margin-bottom:4px">Módulos (opcional, tildá uno o varios):</div><div class="chips">'; if(!mods.length){ m+='<span style="font-size:11px;color:#A8A69E">El proyecto no tiene módulos definidos (cargalos en Proyectos).</span>'; } else { m+=mods.map(md=>{const on=sel.includes(md);return '<button class="chip'+(on?' on':'')+'" onclick="toggleModuloPl(\''+b.id+'\',\''+md.replace(/'/g,"\\\\'")+'\','+(on?'true':'false')+')">'+md+'</button>';}).join(''); } return m+'</div></div>'; })()
           + '<div class="pl-row"><input type="date" value="'+(b.fecha_desde||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_desde\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">a</span><input type="date" value="'+(b.fecha_hasta||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_hasta\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">'+diasHabiles(b.fecha_desde,b.fecha_hasta).length+' días háb.</span></div>'
@@ -2693,17 +2697,20 @@
       return h;
     }
     async function agregarEstacion(estKey) {
-      if (!proyectos.length) { setEstado("Creá un proyecto primero.", "err"); return; }
       const st = STATIONS[estKey];
-      const { data, error } = await sb.from("planificacion_bloques").insert({ estacion: estKey, subtarea: st.subs[0], proyecto_id: proyectos[0].id, modo: "nombre", fecha_desde: null, fecha_hasta: null }).select();
+      // La estación arranca SIN proyecto: es la línea de montaje, no pertenece a un
+      // proyecto. Nico le asigna el proyecto después desde la fila del bloque.
+      const { data, error } = await sb.from("planificacion_bloques").insert({ estacion: estKey, subtarea: st.subs[0], proyecto_id: null, modo: "nombre", fecha_desde: null, fecha_hasta: null }).select();
       if (error) return setEstado("Error: " + error.message, "err");
       // Dejar la estación recién creada expandida y marcada para hacer scroll hacia ella tras recargar.
       if (data && data[0]) { planiAbiertos.add(data[0].id); planiScrollA = data[0].id; }
       cargar();
     }
     async function agregarEstacionDefault() {
-      if (!proyectos.length) { setEstado("Creá un proyecto primero.", "err"); return; }
-      const filas = STKEYS.map(k => ({ estacion: k, subtarea: STATIONS[k].subs[0], proyecto_id: proyectos[0].id, modo: "nombre" }));
+      // Crea las estaciones de la línea de montaje UNA sola vez, SIN proyecto.
+      // Nico asigna después a qué proyecto va cada una. No se atan a proyectos[0]
+      // (eso las duplicaba por proyecto).
+      const filas = STKEYS.map(k => ({ estacion: k, subtarea: STATIONS[k].subs[0], proyecto_id: null, modo: "nombre" }));
       const { error } = await sb.from("planificacion_bloques").insert(filas);
       if (error) return setEstado("Error: " + error.message, "err"); cargar();
     }
@@ -3214,7 +3221,9 @@
       const ocultas = detalle.length - filasVisibles.length;
       // horas por persona/día para detectar sobreasignación (todas las tareas cuentan).
       const horasDia = {};
-      detalle.forEach(f => { if (f.ausente) return; const k = f.persona_real + "|" + f.fecha; horasDia[k] = (horasDia[k]||0) + (Number(f.horas_normales)||0); });
+      // Los contratistas son recurso tercerizado e ilimitado: pueden estar en varias
+      // tareas el mismo día sin que sea sobreasignación. No cuentan para el aviso.
+      detalle.forEach(f => { if (f.ausente) return; const pp = personas.find(x => x.id === f.persona_real); if (pp && pp.tipo === "Contratista") return; const k = f.persona_real + "|" + f.fecha; horasDia[k] = (horasDia[k]||0) + (Number(f.horas_normales)||0); });
 
       let h = '<p style="font-size:13px;color:#888780;margin-top:0">Registro real día por día de Base Neuquén. Editá lo que pasó: cargar horas trabajadas y extra, marcar ausencias. Los días anteriores a hoy son historia (🔒).</p>';
       h += '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;background:#FAFAF8;border:1px solid #EEECE4;border-radius:10px;padding:8px 12px">';
@@ -4154,11 +4163,16 @@
           return nombrePersona(a).localeCompare(nombrePersona(b),"es");
         });
       const cell={}; detHisto.forEach(f=>{ cell[f.persona_real+"|"+f.fecha]= f.ausente?"__aus":f.estacion_real; });
-      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0">Personas en filas, días en columnas, color por estación.</p><div style="display:flex;gap:8px;align-items:center">'+filtroHistoHTML+botonesExport("histo-print","histograma")+'</div></div><div id="histo-print"><div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:11px;min-width:'+(160+fechas.length*52)+'px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8">Persona</th>';
+      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0">Personas en filas, días en columnas, color por estación. <span style="background:#FBF0DE;color:#8A5410;border-radius:4px;padding:1px 5px;font-size:11px">motivo</span> = no disponible (vacaciones/licencia).</p><div style="display:flex;gap:8px;align-items:center">'+filtroHistoHTML+botonesExport("histo-print","histograma")+'</div></div><div id="histo-print"><div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:11px;min-width:'+(160+fechas.length*52)+'px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8">Persona</th>';
       fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:50px">'+dm(d)+'</th>');
       h+='</tr></thead><tbody>';
       pers.forEach(pid=>{ const esContr=esDirectoH(pid)===1; h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 12px;font-weight:500;position:sticky;left:0;background:#fff;white-space:nowrap">'+nombrePersona(pid)+(esContr?' <span style="color:#A8A69E;font-weight:400" title="Contratista">◇</span>':'')+'</td>';
-        fechas.forEach(d=>{ const t=cell[pid+"|"+d]; let c='<span style="color:#D3D1C7">—</span>'; if(t==="__aus")c='<span style="display:inline-block;width:100%;background:#FCEBEB;color:#A32D2D;border-radius:5px;padding:3px 0;font-size:9px">Ausente</span>'; else if(t===SUP_MARK)c='<span style="display:inline-block;width:100%;background:'+SUP_BG+';color:'+SUP_COLOR+';border-radius:5px;padding:3px 1px;font-size:8.5px">'+SUP_LABEL.slice(0,8)+'</span>'; else if(t&&STATIONS[t])c='<span style="display:inline-block;width:100%;background:'+STATIONS[t].bg+';color:'+STATIONS[t].color+';border-radius:5px;padding:3px 1px;font-size:8.5px">'+STATIONS[t].label.slice(0,8)+'</span>'; h+='<td style="padding:4px;text-align:center">'+c+'</td>'; });
+        fechas.forEach(d=>{ const t=cell[pid+"|"+d]; let c; const mot=tipoNoDispoEn(pid,d);
+          if(t==="__aus") c = mot ? chipNoDispo(mot) : '<span style="display:inline-block;width:100%;background:#FCEBEB;color:#A32D2D;border-radius:5px;padding:3px 0;font-size:9px">Ausente</span>';
+          else if(t===SUP_MARK) c='<span style="display:inline-block;width:100%;background:'+SUP_BG+';color:'+SUP_COLOR+';border-radius:5px;padding:3px 1px;font-size:8.5px">'+SUP_LABEL.slice(0,8)+'</span>';
+          else if(t&&STATIONS[t]) c='<span style="display:inline-block;width:100%;background:'+STATIONS[t].bg+';color:'+STATIONS[t].color+';border-radius:5px;padding:3px 1px;font-size:8.5px">'+STATIONS[t].label.slice(0,8)+'</span>';
+          else c = mot ? chipNoDispo(mot) : '<span style="color:#D3D1C7">—</span>';
+          h+='<td style="padding:4px;text-align:center">'+c+'</td>'; });
         h+='</tr>';
       });
       h+='</tbody></table></div></div>';
@@ -4220,19 +4234,24 @@
       const ifDe = (id)=>{ const t=trailers.find(x=>x.id===id); return t ? (t.if_codigo||'(sin IF)') : ''; };
       const fechas=[...new Set(detH.map(f=>f.fecha))].sort();
       const pers=[...new Set(detH.map(f=>f.persona_real))];
+      // Sumar personas de Neuquén que estén NO disponibles (vacaciones/licencia) dentro del
+      // rango visible, aunque no tengan ninguna jornada cargada: así igual se ven en el histograma.
+      if(fechas.length){ const f0=fechas[0], f1=fechas[fechas.length-1];
+        personas.forEach(p=>{ if((p.sede)!=='neuquen') return; if(pers.includes(p.id)) return; if(dispo.some(n=>n.persona_id===p.id && n.desde<=f1 && n.hasta>=f0)) pers.push(p.id); }); }
       // Celda: guardamos tarea + IF del trailer (para poder mostrar ambos cuando el filtro es "Todos").
       const cell={}; detH.forEach(f=>{ cell[f.persona_real+"|"+f.fecha]= f.ausente?{aus:true}:{tarea:(f.estacion_real||"—"), iff:ifDe(f.trailer_id)}; });
       // Paleta simple por tarea (categoría).
       const cats=[...new Set(detH.map(f=>f.estacion_real||"—"))];
       const palette=["#E6F1FB|#185FA5","#E8F3DE|#3B6D11","#FAEEDA|#854F0B","#FBEAF0|#993556","#EFE7FB|#6B3FA0","#F2E8D8|#7A5C00","#E1F5EE|#0F6E56"];
       const colorDe={}; cats.forEach((c,i)=>{ colorDe[c]=palette[i%palette.length].split("|"); });
-      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0">Personas en filas, días en columnas, color por tarea.'+(soloTodos?' Con el filtro en «Todos», cada celda muestra la tarea y el IF del trailer.':'')+'</p><div style="display:flex;gap:8px;align-items:center">'+filtro+botonesExport("histon-print","histograma_neuquen")+'</div></div><div id="histon-print"><div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:11px;min-width:'+(160+fechas.length*(soloTodos?64:52))+'px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8">Persona</th>';
+      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0">Personas en filas, días en columnas, color por tarea. <span style="background:#FBF0DE;color:#8A5410;border-radius:4px;padding:1px 5px;font-size:11px">motivo</span> = no disponible (vacaciones/licencia).'+(soloTodos?' Con el filtro en «Todos», cada celda muestra la tarea y el IF del trailer.':'')+'</p><div style="display:flex;gap:8px;align-items:center">'+filtro+botonesExport("histon-print","histograma_neuquen")+'</div></div><div id="histon-print"><div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:11px;min-width:'+(160+fechas.length*(soloTodos?64:52))+'px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8">Persona</th>';
       fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:'+(soloTodos?62:50)+'px">'+dm(d)+'</th>');
       h+='</tr></thead><tbody>';
       pers.forEach(pid=>{ h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 12px;font-weight:500;position:sticky;left:0;background:#fff;white-space:nowrap">'+nombrePersona(pid)+'</td>';
-        fechas.forEach(d=>{ const t=cell[pid+"|"+d]; let c='<span style="color:#D3D1C7">—</span>';
-          if(t && t.aus)c='<span style="display:inline-block;width:100%;background:#FCEBEB;color:#A32D2D;border-radius:5px;padding:3px 0;font-size:9px">Ausente</span>';
+        fechas.forEach(d=>{ const t=cell[pid+"|"+d]; const mot=tipoNoDispoEn(pid,d); let c;
+          if(t && t.aus) c = mot ? chipNoDispo(mot) : '<span style="display:inline-block;width:100%;background:#FCEBEB;color:#A32D2D;border-radius:5px;padding:3px 0;font-size:9px">Ausente</span>';
           else if(t){ const col=colorDe[t.tarea]||["#EEE","#555"]; const iffLine = soloTodos ? '<div style="font-size:8px;font-weight:700;opacity:.85;line-height:1.1">'+String(t.iff).replace(/</g,'&lt;')+'</div>' : ''; c='<span style="display:inline-block;width:100%;background:'+col[0]+';color:'+col[1]+';border-radius:5px;padding:3px 1px;font-size:8.5px" title="'+String(t.tarea).replace(/"/g,'&quot;')+(soloTodos?(' · IF '+String(t.iff).replace(/"/g,'&quot;')):'')+'">'+iffLine+String(t.tarea).slice(0,8)+'</span>'; }
+          else c = mot ? chipNoDispo(mot) : '<span style="color:#D3D1C7">—</span>';
           h+='<td style="padding:4px;text-align:center">'+c+'</td>'; });
         h+='</tr>';
       });
