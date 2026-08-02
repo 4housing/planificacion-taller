@@ -1152,7 +1152,7 @@
       Object.keys(mantParte).forEach(k=>{ const [tid,f]=k.split("|"); if(f>=hace30){ const mt=mantTareas.find(x=>x.id===tid); if(mt&&mt.trailer_id) conParteReciente.add(mt.trailer_id); } });
       const sinMantReciente = parque.filter(t=> !conParteReciente.has(t.id));
 
-      const card = (num,label,color,extra)=> '<div style="flex:1;min-width:150px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:14px 18px">'
+      const card = (num,label,color,extra,dest)=> '<div '+(dest?'onclick="cambiarTab(\''+dest+'\')" title="Ver detalle →" ':'')+'style="'+(dest?'cursor:pointer;':'')+'flex:1;min-width:150px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:14px 18px">'
         + '<div style="font-size:30px;font-weight:800;color:'+(color||'#2C2C2A')+';line-height:1">'+num+'</div>'
         + '<div style="font-size:12.5px;color:#5F5E5A;margin-top:5px">'+label+'</div>'+(extra?'<div style="font-size:11px;color:#A8A69E;margin-top:2px">'+extra+'</div>':'')+'</div>';
 
@@ -1162,11 +1162,11 @@
 
       // Fila 1 — KPIs principales
       h += '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">';
-      h += card(total, "Trailers en el parque", null, internos.length?(internos.length+" de uso interno, no computan"):"");
-      h += card(utilPct+"%", "Utilización (alquilados)", utilPct>=70?'#3B6D11':utilPct>=40?'#854F0B':'#A32D2D', alquilados+" de "+total+" alquilados");
-      h += card(enCurso.length, "Mantenimientos en curso hoy", enCurso.length?'#185FA5':'#888780', en7?("+"+en7+" en los próximos 7 días"):"");
-      h += card(bajos.length, "Ítems bajo mínimo", bajos.length?'#A32D2D':'#3B6D11');
-      h += card(fmtMoneda(valorizado), "Valorizado de stock", '#2C2C2A');
+      h += card(total, "Trailers en el parque", null, internos.length?(internos.length+" de uso interno, no computan"):"", 'nqn_trailers');
+      h += card(utilPct+"%", "Utilización (alquilados)", utilPct>=70?'#3B6D11':utilPct>=40?'#854F0B':'#A32D2D', alquilados+" de "+total+" alquilados", 'nqn_trailers');
+      h += card(enCurso.length, "Mantenimientos en curso hoy", enCurso.length?'#185FA5':'#888780', en7?("+"+en7+" en los próximos 7 días"):"", 'nqn_manten');
+      h += card(bajos.length, "Ítems bajo mínimo", bajos.length?'#A32D2D':'#3B6D11', "", 'nqn_stock');
+      h += card(fmtMoneda(valorizado), "Valorizado de stock", '#2C2C2A', "", 'nqn_stock');
       h += '</div>';
 
       // Fila 2 — desglose del parque por estado (clickeable → va a Trailers filtrado)
@@ -3989,7 +3989,7 @@
       const tareasDe = (fch)=>{ if(!fch)return[]; const s={}; det.filter(f=>f.fecha===fch&&!f.ausente).forEach(f=>{const k=f.estacion_real+"|"+f.subtarea_real; if(!s[k])s[k]={est:f.estacion_real,sub:f.subtarea_real,g:[]}; s[k].g.push(nombrePersona(f.persona_real));}); return Object.values(s); };
 
       const dashCalcs = []; // recolecta fórmulas de las tarjetas para el colapsable único
-      const card=(l,v,s,col,calc)=>{ if(calc) dashCalcs.push('<b>'+l+':</b> '+calc); return '<div style="flex:1;min-width:150px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:14px 16px"><div style="font-size:12px;color:#888780">'+l+'</div><div style="font-size:22px;font-weight:600;color:'+(col||'#2C2C2A')+';margin-top:2px">'+v+'</div>'+(s?'<div style="font-size:11.5px;color:#A8A69E;margin-top:2px">'+s+'</div>':'')+'</div>'; };
+      const card=(l,v,s,col,calc,dest)=>{ if(calc) dashCalcs.push('<b>'+l+':</b> '+calc); return '<div '+(dest?'onclick="cambiarTab(\''+dest+'\')" title="Ver detalle →" ':'')+'style="'+(dest?'cursor:pointer;':'')+'flex:1;min-width:150px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:14px 16px"><div style="font-size:12px;color:#888780">'+l+'</div><div style="font-size:22px;font-weight:600;color:'+(col||'#2C2C2A')+';margin-top:2px">'+v+'</div>'+(s?'<div style="font-size:11.5px;color:#A8A69E;margin-top:2px">'+s+'</div>':'')+'</div>'; };
       let h='<div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">';
       h+='<div style="display:flex;border:1px solid #E6E4DC;border-radius:8px;overflow:hidden"><button onclick="setVista(\'pm\')" style="border:none;padding:7px 16px;font-size:13px;cursor:pointer;background:'+(vistaDash==='pm'?'#185FA5':'transparent')+';color:'+(vistaDash==='pm'?'#fff':'#888780')+'">Vista PM</button><button onclick="setVista(\'coord\')" style="border:none;padding:7px 16px;font-size:13px;cursor:pointer;background:'+(vistaDash==='coord'?'#185FA5':'transparent')+';color:'+(vistaDash==='coord'?'#fff':'#888780')+'">Vista Coordinador</button></div>';
       h+='<select onchange="setDashProy(this.value)" style="width:auto"><option value="">Todos los vigentes</option>'+proyVig.map(p=>'<option value="'+p.id+'" '+(p.id===dashProy?'selected':'')+'>'+p.nombre+'</option>').join('')+(proyOperD.filter(p=>p.estado==='Cerrado').length?('<optgroup label="Cerrados">'+proyOperD.filter(p=>p.estado==='Cerrado').map(p=>'<option value="'+p.id+'" '+(p.id===dashProy?'selected':'')+'>'+p.nombre+' (cerrado)</option>').join('')+'</optgroup>'):'')+'</select>';
@@ -3997,14 +3997,14 @@
       h+='<div id="dash-print">';
       if(det.length===0){ h+='<p style="font-size:13px;color:#888780">Sin datos en el detalle todavía. Generá el detalle diario para ver indicadores.</p></div>'; contenido.innerHTML=h; return; }
       // --- Franja de salud del proyecto: CPI y SPI (ambas vistas) ---
-      const idxCard=(sigla,nombre,val,ref)=>'<div style="flex:1;min-width:220px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:14px 16px">'
+      const idxCard=(sigla,nombre,val,ref,dest)=>'<div '+(dest?'onclick="cambiarTab(\''+dest+'\')" title="Ver detalle →" ':'')+'style="'+(dest?'cursor:pointer;':'')+'flex:1;min-width:220px;background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:14px 16px">'
         + '<div style="display:flex;align-items:baseline;gap:8px"><span style="font-size:13px;font-weight:700;color:#5F5E5A" title="'+sigla.title+'">'+sigla.abrev+'</span><span style="font-size:11.5px;color:#A8A69E">'+nombre+'</span></div>'
         + '<div style="font-size:11px;color:#BDBBB2;margin-top:1px;font-style:italic">'+sigla.full+'</div>'
         + '<div style="font-size:26px;font-weight:700;color:'+idxColor(val)+';margin-top:2px">'+idxTxt(val)+'</div>'
         + '<div style="font-size:11px;color:#A8A69E;margin-top:3px;line-height:1.4">'+ref+'</div></div>';
       h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">'
-        + idxCard({abrev:"CPI",full:"Cost Performance Index (Índice de Desempeño de Costo)",title:"Cost Performance Index"},"¿Estoy gastando de más?",cpi,"Por cada $1 que planificaste gastar, cuánto trabajo real obtuviste. <b>1,00 = justo lo previsto</b>. Arriba de 1 = rendís más por peso (vas bien); abajo de 1 = cada jornada sale más cara de lo planeado (sobrecosto). Ej.: 0,90 = estás gastando ~10% de más.")
-        + idxCard({abrev:"SPI",full:"Schedule Performance Index (Índice de Desempeño de Cronograma)",title:"Schedule Performance Index"},"¿Voy al día con el plazo?",spi,"Cuánto del trabajo que debías tener hecho hasta ayer efectivamente hiciste (el día en curso no se cuenta porque aún no cerró). <b>1,00 = al día</b>. Arriba de 1 = adelantado; abajo de 1 = atrasado. Ej.: 0,80 = llevás hecho el 80% de lo que debías a esta altura.")
+        + idxCard({abrev:"CPI",full:"Cost Performance Index (Índice de Desempeño de Costo)",title:"Cost Performance Index"},"¿Estoy gastando de más?",cpi,"Por cada $1 que planificaste gastar, cuánto trabajo real obtuviste. <b>1,00 = justo lo previsto</b>. Arriba de 1 = rendís más por peso (vas bien); abajo de 1 = cada jornada sale más cara de lo planeado (sobrecosto). Ej.: 0,90 = estás gastando ~10% de más.", 'costos')
+        + idxCard({abrev:"SPI",full:"Schedule Performance Index (Índice de Desempeño de Cronograma)",title:"Schedule Performance Index"},"¿Voy al día con el plazo?",spi,"Cuánto del trabajo que debías tener hecho hasta ayer efectivamente hiciste (el día en curso no se cuenta porque aún no cerró). <b>1,00 = al día</b>. Arriba de 1 = adelantado; abajo de 1 = atrasado. Ej.: 0,80 = llevás hecho el 80% de lo que debías a esta altura.", 'costos')
         + '</div>';
       // --- POR QUÉ dan esos índices (dinámico) ---
       (function(){
@@ -4037,22 +4037,22 @@
       if(vistaDash==='pm'){
         const usoPct = presup ? (real/presup*100) : 0;
         h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">'
-          + card("Costo real acumulado",fmtAR(real),costoImprodD>0?("incluye "+fmtAR(costoImprodD)+" improductivo"):null,null,"Suma de (horas normales × valor-hora del mes) + (horas extra × valor-hora × 1,5 lun-sáb ó 2 dom/feriado) de las jornadas trabajadas, más las ausencias pagadas (personal mensualizado: se paga la jornada planificada aunque no se trabaje).")
-          + card("Uso del presupuesto MO", presup?usoPct.toFixed(0)+"%":"s/presup", fmtAR(real)+" de "+fmtAR(presup), usoPct>100?'#A32D2D':usoPct>85?'#BA7517':'#3B6D11', "Costo real acumulado ÷ presupuesto de mano de obra cargado (La Huella + Montaje). Verde <85%, ámbar 85–100%, rojo >100%.")
-          + card("Proyección de costo final", eac!=null?fmtAR(eac):"s/dato", eac!=null?(eacDesv>=0?"+":"")+fmtAR(eacDesv)+" vs presupuesto":"necesita presupuesto y CPI", eac==null?null:(eacDesv>0?'#A32D2D':'#3B6D11'), "Si el proyecto sigue al ritmo de eficiencia actual, cuánto va a costar terminarlo. Se calcula presupuesto ÷ CPI. El número de abajo es cuánto te pasarías (o ahorrarías) contra el presupuesto.")
-          + card("Horas extra", pctExtra.toFixed(0)+"%", hsExtra+" h · "+fmtAR(extra)+" del costo", pctExtra>15?'#A32D2D':pctExtra>5?'#BA7517':'#3B6D11', "Costo de horas extra (valorizadas 1.5x lun-sáb, 2x dom/feriado) ÷ costo real total. Verde <5%, ámbar 5–15%, rojo >15%.")
-          + card("Ausencias", ausencias+(costoImprodD>0?" · "+fmtAR(costoImprodD):""), "jornadas pagadas sin producción", ausencias>0?'#A32D2D':'#3B6D11', "Jornadas marcadas ausentes. El personal directo es mensualizado: se pagan igual (costo improductivo, incluido en el costo real) aunque no produzcan.")
+          + card("Costo real acumulado",fmtAR(real),costoImprodD>0?("incluye "+fmtAR(costoImprodD)+" improductivo"):null,null,"Suma de (horas normales × valor-hora del mes) + (horas extra × valor-hora × 1,5 lun-sáb ó 2 dom/feriado) de las jornadas trabajadas, más las ausencias pagadas (personal mensualizado: se paga la jornada planificada aunque no se trabaje).", 'costos')
+          + card("Uso del presupuesto MO", presup?usoPct.toFixed(0)+"%":"s/presup", fmtAR(real)+" de "+fmtAR(presup), usoPct>100?'#A32D2D':usoPct>85?'#BA7517':'#3B6D11', "Costo real acumulado ÷ presupuesto de mano de obra cargado (La Huella + Montaje). Verde <85%, ámbar 85–100%, rojo >100%.", 'costos')
+          + card("Proyección de costo final", eac!=null?fmtAR(eac):"s/dato", eac!=null?(eacDesv>=0?"+":"")+fmtAR(eacDesv)+" vs presupuesto":"necesita presupuesto y CPI", eac==null?null:(eacDesv>0?'#A32D2D':'#3B6D11'), "Si el proyecto sigue al ritmo de eficiencia actual, cuánto va a costar terminarlo. Se calcula presupuesto ÷ CPI. El número de abajo es cuánto te pasarías (o ahorrarías) contra el presupuesto.", 'costos')
+          + card("Horas extra", pctExtra.toFixed(0)+"%", hsExtra+" h · "+fmtAR(extra)+" del costo", pctExtra>15?'#A32D2D':pctExtra>5?'#BA7517':'#3B6D11', "Costo de horas extra (valorizadas 1.5x lun-sáb, 2x dom/feriado) ÷ costo real total. Verde <5%, ámbar 5–15%, rojo >15%.", 'detalle')
+          + card("Ausencias", ausencias+(costoImprodD>0?" · "+fmtAR(costoImprodD):""), "jornadas pagadas sin producción", ausencias>0?'#A32D2D':'#3B6D11', "Jornadas marcadas ausentes. El personal directo es mensualizado: se pagan igual (costo improductivo, incluido en el costo real) aunque no produzcan.", 'detalle')
           + '</div>';
         h+=bloqueComoSeCalcula('dash-pm-kpis', dashCalcs.join('<br>'));
         // Origen del desvío (torta de barras) — por qué te estás desviando
         h+=bloqueOrigenDesvio(det);
       } else {
         h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">'
-          + card("Cumplimiento del plan", ppc!=null?(ppc*100).toFixed(0)+"%":"s/dato", ppc!=null?cumplidas+" de "+planHastaHoy+" jornadas según plan":"sin jornadas hasta ayer", ppc==null?null:(ppc>=0.9?'#3B6D11':ppc>=0.75?'#BA7517':'#A32D2D'), "De las jornadas que estaban planificadas hasta ayer (el día en curso no se cuenta porque aún no cerró), qué porcentaje salió exactamente como estaba previsto (misma persona, misma estación, mismas horas, sin ausencias). Es la mejor señal temprana de que el plan se está cumpliendo o no. Verde ≥90%, ámbar 75–89%, rojo <75%.")
-          + card("Cobertura próx. 5 días", sinCubrir===0?"OK":sinCubrir+" sin cubrir", sinCubrir===0?"todo el plan cubierto":"días-estación sin gente", sinCubrir===0?'#3B6D11':'#A32D2D', "Combinaciones estación-proyecto-día planificadas para los próximos 5 días hábiles que todavía no tienen ninguna persona asignada en el detalle.")
-          + card("Horas extra", hsExtra+" h", "$"+Math.round(extra).toLocaleString("es-AR")+" en extra", hsExtra>0?'#BA7517':null, "Suma de horas extra de todas las jornadas del período visible. El monto es esas horas valorizadas al doble del valor-hora.")
-          + card("Ausencias", ausencias+(costoImprodD>0?" · "+fmtAR(costoImprodD):""), "jornadas pagadas sin producción", ausencias>0?'#A32D2D':'#3B6D11', "Jornadas marcadas ausentes. El personal directo es mensualizado: se pagan igual (costo improductivo, incluido en el costo real) aunque no produzcan.")
-          + card("Personal directo ocupado hoy", (function(){ const s=new Set(); det.forEach(f=>{ if(f.fecha!==hoy||f.ausente)return; const pp=personas.find(x=>x.id===f.persona_real); if(pp&&pp.tipo!=="Contratista") s.add(f.persona_real); }); return s.size; })()+"/"+personasHuella().filter(p=>p.tipo!=='Contratista').length, "con tarea hoy / plantel directo", null, "Personas directas (no contratistas) con al menos una jornada no ausente con fecha de hoy, sobre el total de personas directas cargadas.")
+          + card("Cumplimiento del plan", ppc!=null?(ppc*100).toFixed(0)+"%":"s/dato", ppc!=null?cumplidas+" de "+planHastaHoy+" jornadas según plan":"sin jornadas hasta ayer", ppc==null?null:(ppc>=0.9?'#3B6D11':ppc>=0.75?'#BA7517':'#A32D2D'), "De las jornadas que estaban planificadas hasta ayer (el día en curso no se cuenta porque aún no cerró), qué porcentaje salió exactamente como estaba previsto (misma persona, misma estación, mismas horas, sin ausencias). Es la mejor señal temprana de que el plan se está cumpliendo o no. Verde ≥90%, ámbar 75–89%, rojo <75%.", 'detalle')
+          + card("Cobertura próx. 5 días", sinCubrir===0?"OK":sinCubrir+" sin cubrir", sinCubrir===0?"todo el plan cubierto":"días-estación sin gente", sinCubrir===0?'#3B6D11':'#A32D2D', "Combinaciones estación-proyecto-día planificadas para los próximos 5 días hábiles que todavía no tienen ninguna persona asignada en el detalle.", 'plani')
+          + card("Horas extra", hsExtra+" h", "$"+Math.round(extra).toLocaleString("es-AR")+" en extra", hsExtra>0?'#BA7517':null, "Suma de horas extra de todas las jornadas del período visible. El monto es esas horas valorizadas al doble del valor-hora.", 'detalle')
+          + card("Ausencias", ausencias+(costoImprodD>0?" · "+fmtAR(costoImprodD):""), "jornadas pagadas sin producción", ausencias>0?'#A32D2D':'#3B6D11', "Jornadas marcadas ausentes. El personal directo es mensualizado: se pagan igual (costo improductivo, incluido en el costo real) aunque no produzcan.", 'detalle')
+          + card("Personal directo ocupado hoy", (function(){ const s=new Set(); det.forEach(f=>{ if(f.fecha!==hoy||f.ausente)return; const pp=personas.find(x=>x.id===f.persona_real); if(pp&&pp.tipo!=="Contratista") s.add(f.persona_real); }); return s.size; })()+"/"+personasHuella().filter(p=>p.tipo!=='Contratista').length, "con tarea hoy / plantel directo", null, "Personas directas (no contratistas) con al menos una jornada no ausente con fecha de hoy, sobre el total de personas directas cargadas.", 'parte')
           + '</div>';
         h+=bloqueComoSeCalcula('dash-coord-kpis', dashCalcs.join('<br>'));
         if(sinCubrir>0){
