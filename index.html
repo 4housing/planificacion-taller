@@ -225,6 +225,7 @@
       tab = SEDES[s].tabDefault;
       // Resetear filtros que guardan ids específicos de una sede, para no arrastrarlos a la otra.
       ganttProy = ""; histoProy = ""; impactoProy = ""; planiProy = ""; detalleDesde = null; detalleVerTodo = false;
+      parteFecha = null; parteProy = ""; parteEst = ""; partePersona = "";
       trailerEstadoFiltro = ""; mantTrailerFiltro = ""; mantDesdeFiltro = "";
       renderTabs();
       cargar();
@@ -256,6 +257,7 @@
     let planiResaltar = null;  // {persona, fecha, bloques:[ids]} para resaltar tras saltar a un conflicto
     let impactoProy = "";      // filtro de proyecto del panel de impacto ("" = todos)
     let ganttProy = "", histoProy = "";  // filtros de Gantt e Histograma (compartidos; se resetean al cambiar de sede)
+    let parteFecha = null, parteProy = "", parteEst = "", partePersona = "";  // filtros de la pestaña Parte diario (antes no estaban declarados → renderParte tiraba ReferenceError al entrar)
     function setImpactoProy(pid){ impactoProy = (impactoProy===pid ? "" : pid); renderDetalle(); }
     // Desde el desglose por estación: hacer scroll a la primera fila de esa estación en la tabla del detalle.
     function detScrollAEstacion(est){
