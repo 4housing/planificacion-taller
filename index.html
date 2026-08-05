@@ -3288,14 +3288,66 @@
       if (error) return setEstado("Error: "+error.message,"err");
       const f = detalle.find(x=>x.id===id); if(f) f[c]=u[c]; setEstado("\u2713 Guardado.","ok"); renderDetalleNqn();
     }
-    // Cambiar la Tarea (categoría) del detalle de Neuquén: al cambiar, se resetea la subtarea a la primera de la categoría.
+    // ¿La categoría es un SERVICIO? (servicio urgente que surge en la base). Data-driven: matchea
+    // cualquier categoría cuyo nombre contenga "servicio" (SERVICIO, SERVICIOS, etc.).
+    function esCategoriaServicioNqn(cat){ return typeof cat==="string" && /servicio/i.test(cat); }
+    // Cambiar la Tarea (categoría) del detalle de Neuquén: al cambiar, se resetea la subtarea a la
+    // primera de la categoría. Caso especial (SOLO en Detalle diario): cuando surge un servicio
+    // urgente y se cambia la Tarea a la categoría de SERVICIO, la tarea que estaba planificada NO
+    // se pierde: se corre al día hábil siguiente y se ofrece correr también el resto de la agenda
+    // futura de la persona, igual que una ausencia. (En Planificación no aplica: ahí ya está contemplado.)
     async function cambiarTareaDetNqn(id, cat){
+      const f = detalle.find(x=>x.id===id);
+      const anterior = f ? (f.estacion_real||null) : null;
+      const entraAServicio = esCategoriaServicioNqn(cat) && !esCategoriaServicioNqn(anterior);
+      const desplazable = f && anterior && cat && cat!==anterior && !f.ausente && !f.es_extra && f.fecha >= hoyISO();
+      if (entraAServicio && desplazable) return convertirEnServicioNqn(f, cat, anterior);
       const cc = tareasDeMant();
       const primeraSub = (cat && cc[cat] && cc[cat].length) ? (cc[cat][0].subtarea||"") : "";
       const { error } = await sb.from("planificacion_detalle_diario").update({ estacion_real: cat||null, subtarea_real: primeraSub||null }).eq("id", id);
       if (error) return setEstado("Error: "+error.message,"err");
-      const f = detalle.find(x=>x.id===id); if(f){ f.estacion_real=cat||null; f.subtarea_real=primeraSub||null; }
+      if(f){ f.estacion_real=cat||null; f.subtarea_real=primeraSub||null; }
       setEstado("\u2713 Guardado.","ok"); renderDetalleNqn();
+    }
+    // Convierte la fila en un servicio urgente (Detalle diario Neuquén): corre la tarea planificada
+    // que estaba —y opcionalmente el resto de la agenda de la persona— al día hábil siguiente.
+    async function convertirEnServicioNqn(f, catNew, anterior){
+      const manana = sumarDiasHabiles(f.fecha, 1);
+      const cc = tareasDeMant();
+      const primeraSub = (catNew && cc[catNew] && cc[catNew].length) ? (cc[catNew][0].subtarea||"") : "";
+      const nombreAnt = nombreEstacion(anterior)+(f.subtarea_real?(" · "+f.subtarea_real):"");
+      const msg = "Servicio urgente para "+nombrePersona(f.persona_real)+" el "+dmy(f.fecha)+".\n\n"
+        + "La tarea que tenía planificada («"+nombreAnt+"») se corre al "+dmy(manana)+" para no perderla, y hoy queda cargado el servicio.\n\n"
+        + "• Aceptar = correr la planificación (enseguida te pregunto si corro solo esa tarea o toda la agenda futura de la persona).\n"
+        + "• Cancelar = NO tocar la tarea anterior; reemplazar por el servicio como antes.";
+      if(!confirm(msg)){
+        const { error } = await sb.from("planificacion_detalle_diario").update({ estacion_real: catNew||null, subtarea_real: primeraSub||null }).eq("id", f.id);
+        if (error) return setEstado("Error: "+error.message,"err");
+        f.estacion_real=catNew||null; f.subtarea_real=primeraSub||null;
+        setEstado("✓ Guardado (sin correr la planificación).","ok"); renderDetalleNqn(); return;
+      }
+      // Datos de la tarea desplazada, capturados ANTES de pisar la fila.
+      const desp = { trailer_id:f.trailer_id, proyecto_id:f.proyecto_id, estacion:anterior,
+        subtarea:f.subtarea_real||"", persona:f.persona_real, horas:(f.horas_normales!=null?f.horas_normales:8) };
+      // 1) Correr la agenda futura de la persona (reusa la lógica de ausencia): libera el día siguiente.
+      await ofrecerCorrerDetalle(f, "pasó a un servicio urgente el "+dmy(f.fecha));
+      // 2) La fila de hoy queda con el servicio.
+      const { error:e1 } = await sb.from("planificacion_detalle_diario").update({ estacion_real: catNew||null, subtarea_real: primeraSub||null }).eq("id", f.id);
+      if (e1) return setEstado("Error al cargar el servicio: "+e1.message,"err");
+      f.estacion_real=catNew||null; f.subtarea_real=primeraSub||null;
+      // 3) Crear la tarea desplazada como jornada planificada en el día hábil siguiente.
+      const fila = { fecha:manana, sede:"neuquen", persona_plan:desp.persona, persona_real:desp.persona,
+        proyecto_id:desp.proyecto_id||null, trailer_id:desp.trailer_id||null,
+        estacion_plan:desp.estacion, subtarea_plan:desp.subtarea, estacion_real:desp.estacion, subtarea_real:desp.subtarea,
+        modulos_plan:null, modulos_real:null, horas_plan:desp.horas, horas_normales:desp.horas, horas_extra:0, ausente:false, es_extra:false };
+      const { data, error:e2 } = await sb.from("planificacion_detalle_diario").insert(fila).select();
+      if (e2) return setEstado("Error al mover la tarea al día siguiente: "+e2.message,"err");
+      if(data && data[0]) detalle.push(data[0]);
+      detalle.sort((a,b)=> a.fecha<b.fecha?-1:a.fecha>b.fecha?1:0);
+      registrarLog("editar","detalle_nqn", nombrePersona(desp.persona)+": servicio el "+dmy(f.fecha)+", «"+nombreEstacion(desp.estacion)+"» corrida a "+dmy(manana));
+      setEstado("✓ Servicio cargado. «"+nombreEstacion(desp.estacion)+"» se corrió al "+dmy(manana)+".","ok");
+      renderDetalleNqn();
+      const av = avisoSolapamiento(desp.persona); if(av) alert(av);
     }
     // Marcar ausente en el detalle de Neuquén, con la misma opción de correr tareas.
     async function toggleAusenteNqn(id, aus){
