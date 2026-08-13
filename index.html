@@ -3286,7 +3286,15 @@
       const u = {}; u[c] = (v===""?null:v);
       const { error } = await sb.from("planificacion_detalle_diario").update(u).eq("id", id);
       if (error) return setEstado("Error: "+error.message,"err");
-      const f = detalle.find(x=>x.id===id); if(f) f[c]=u[c]; setEstado("\u2713 Guardado.","ok"); renderDetalleNqn();
+      const f = detalle.find(x=>x.id===id);
+      if(f){
+        // Neuqu\u00e9n: trailer_id es campo \u00daNICO (no hay "plan" vs "real"). Al reasignar el trailer guardamos
+        // el anterior para no perder el trailer ORIGINAL si esta misma fila se convierte luego en un
+        // servicio urgente (gesto "trailer primero", ver convertirEnServicioNqn).
+        if(c==="trailer_id" && f.trailer_id!=null && f.trailer_id!==u[c]) f._trailer_prev = f.trailer_id;
+        f[c]=u[c];
+      }
+      setEstado("\u2713 Guardado.","ok"); renderDetalleNqn();
     }
     // ¿La categoría es un SERVICIO? (servicio urgente que surge en la base). Data-driven: matchea
     // cualquier categoría cuyo nombre contenga "servicio" (SERVICIO, SERVICIOS, etc.).
@@ -3306,7 +3314,7 @@
       const primeraSub = (cat && cc[cat] && cc[cat].length) ? (cc[cat][0].subtarea||"") : "";
       const { error } = await sb.from("planificacion_detalle_diario").update({ estacion_real: cat||null, subtarea_real: primeraSub||null }).eq("id", id);
       if (error) return setEstado("Error: "+error.message,"err");
-      if(f){ f.estacion_real=cat||null; f.subtarea_real=primeraSub||null; }
+      if(f){ f.estacion_real=cat||null; f.subtarea_real=primeraSub||null; delete f._trailer_prev; }
       setEstado("\u2713 Guardado.","ok"); renderDetalleNqn();
     }
     // Convierte la fila en un servicio urgente (Detalle diario Neuquén): corre la tarea planificada
@@ -3317,20 +3325,33 @@
       const primeraSub = (catNew && cc[catNew] && cc[catNew].length) ? (cc[catNew][0].subtarea||"") : "";
       const nombreAnt = nombreEstacion(anterior)+(f.subtarea_real?(" · "+f.subtarea_real):"");
       const msg = "Servicio urgente para "+nombrePersona(f.persona_real)+" el "+dmy(f.fecha)+".\n\n"
-        + "La tarea que tenía planificada («"+nombreAnt+"») se corre al "+dmy(manana)+" para no perderla, y hoy queda cargado el servicio.\n\n"
-        + "• Aceptar = correr la planificación (enseguida te pregunto si corro solo esa tarea o toda la agenda futura de la persona).\n"
-        + "• Cancelar = NO tocar la tarea anterior; reemplazar por el servicio como antes.";
+        + "El servicio ocupa el día. Se corre un día hábil hacia adelante TODA la agenda de "+nombrePersona(f.persona_real)+" de ese día en adelante (la tarea de hoy, «"+nombreAnt+"», pasa al "+dmy(manana)+" en su trailer). Hoy queda cargado el servicio.\n\n"
+        + "• Aceptar = correr todo al día siguiente y cargar el servicio.\n"
+        + "• Cancelar = NO tocar nada; solo reemplazar por el servicio como antes.";
       if(!confirm(msg)){
         const { error } = await sb.from("planificacion_detalle_diario").update({ estacion_real: catNew||null, subtarea_real: primeraSub||null }).eq("id", f.id);
         if (error) return setEstado("Error: "+error.message,"err");
-        f.estacion_real=catNew||null; f.subtarea_real=primeraSub||null;
+        f.estacion_real=catNew||null; f.subtarea_real=primeraSub||null; delete f._trailer_prev;
         setEstado("✓ Guardado (sin correr la planificación).","ok"); renderDetalleNqn(); return;
       }
       // Datos de la tarea desplazada, capturados ANTES de pisar la fila.
-      const desp = { trailer_id:f.trailer_id, proyecto_id:f.proyecto_id, estacion:anterior,
+      // Trailer ORIGINAL: si el usuario cambió el trailer de la fila justo antes de convertirla en
+      // servicio (gesto "trailer primero"), f.trailer_id ya es el del servicio. Usamos el trailer
+      // previo guardado (_trailer_prev) para que la tarea desplazada vuelva a SU trailer y NO se
+      // duplique en el trailer del servicio. Si no hubo cambio de trailer, cae a f.trailer_id.
+      const trailerOrig = (f._trailer_prev !== undefined && f._trailer_prev !== null) ? f._trailer_prev : f.trailer_id;
+      delete f._trailer_prev;
+      const desp = { trailer_id:trailerOrig, proyecto_id:f.proyecto_id, estacion:anterior,
         subtarea:f.subtarea_real||"", persona:f.persona_real, horas:(f.horas_normales!=null?f.horas_normales:8) };
-      // 1) Correr la agenda futura de la persona (reusa la lógica de ausencia): libera el día siguiente.
-      await ofrecerCorrerDetalle(f, "pasó a un servicio urgente el "+dmy(f.fecha));
+      // 1) El servicio ocupa TODO el día de la persona: correr un día hábil hacia adelante TODAS sus
+      //    demás tareas de ese día EN ADELANTE (cascada), manteniendo cada una su propio trailer. En
+      //    Base Neuquén se usan recursos propios, así que no aplica el reparo de "Contratista".
+      //    (Se procesa de la última fecha a la primera dentro de correrFilasUnDia para no colisionar.)
+      const hoyServ = hoyISO();
+      const aCorrer = detalle.filter(x => x.id!==f.id && x.persona_real===f.persona_real
+          && !x.ausente && !x.es_extra && x.fecha >= f.fecha && x.fecha >= hoyServ)
+          .sort((a,b)=> a.fecha<b.fecha?-1:1);
+      if(aCorrer.length) await correrFilasUnDia(aCorrer);
       // 2) La fila de hoy queda con el servicio.
       const { error:e1 } = await sb.from("planificacion_detalle_diario").update({ estacion_real: catNew||null, subtarea_real: primeraSub||null }).eq("id", f.id);
       if (e1) return setEstado("Error al cargar el servicio: "+e1.message,"err");
