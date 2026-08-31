@@ -4901,6 +4901,22 @@
         h+='<div style="font-size:11px;color:#A8A69E;margin-bottom:14px;line-height:1.5">Son <b>órdenes de magnitud</b> para acumular entre proyectos y tener referencia al presupuestar, no métricas de gestión de este proyecto. Dependen de la configuración y equipamiento de cada módulo, que varía de un proyecto a otro. Solo cubren mano de obra.</div>';
       })();
 
+      // --- Desvíos acusados en el detalle diario (cambios de estación/persona con motivo cargado) ---
+      (function(){
+        const norm=(x)=>x==null?"":String(x);
+        const desvios = det.filter(f=> esRealInf(f.fecha) && !f.ausente && f.motivo_desvio && (norm(f.estacion_real)!==norm(f.estacion_plan) || norm(f.persona_real)!==norm(f.persona_plan)));
+        h+='<div style="font-size:14px;font-weight:600;margin:18px 0 8px">🔀 Desvíos acusados en el detalle</div>';
+        if(!desvios.length){ h+='<div style="font-size:12px;color:#A8A69E;background:#F9F8F4;border-radius:12px;padding:12px 14px;margin-bottom:18px">No se registraron desvíos con motivo en el detalle diario de este proyecto.</div>'; return; }
+        const porMotivo={}; desvios.forEach(f=>{ porMotivo[f.motivo_desvio]=(porMotivo[f.motivo_desvio]||0)+1; });
+        const cambio=(f)=>{ const a=[]; if(norm(f.estacion_real)!==norm(f.estacion_plan)) a.push('Estación: '+nombreEstacion(f.estacion_plan)+' → '+nombreEstacion(f.estacion_real)); if(norm(f.persona_real)!==norm(f.persona_plan)) a.push('Persona: '+nombrePersona(f.persona_plan)+' → '+nombrePersona(f.persona_real)); return a.join(' · '); };
+        h+='<div style="background:#F9F8F4;border-radius:12px;padding:14px 16px;margin-bottom:18px">';
+        h+='<div style="font-size:24px;font-weight:700">'+desvios.length+' <span style="font-size:13px;font-weight:400;color:#888780">desvío(s) con motivo cargado</span></div>';
+        h+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px">'+Object.entries(porMotivo).sort((a,b)=>b[1]-a[1]).map(([m,n])=>'<span style="background:#EDE9F6;color:#3C3489;border-radius:6px;padding:2px 8px;font-size:11.5px">'+m+': <b>'+n+'</b></span>').join('')+'</div>';
+        h+='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="text-align:left;color:#A8A69E"><th style="padding:5px 8px">Fecha</th><th style="padding:5px 8px">Persona</th><th style="padding:5px 8px">Qué cambió</th><th style="padding:5px 8px">Motivo</th></tr></thead><tbody>';
+        desvios.slice().sort((a,b)=>a.fecha<b.fecha?-1:1).forEach(f=>{ h+='<tr style="border-top:1px solid #EEECE4"><td style="padding:5px 8px;white-space:nowrap">'+fdate(f.fecha)+'</td><td style="padding:5px 8px">'+nombrePersona(f.persona_real)+'</td><td style="padding:5px 8px">'+cambio(f)+'</td><td style="padding:5px 8px">'+f.motivo_desvio+'</td></tr>'; });
+        h+='</tbody></table></div></div>';
+      })();
+
       h+='<div style="font-size:14px;font-weight:600;margin:18px 0 8px">📝 Lectura del desvío</div><div style="font-size:13px;color:#5F5E5A;line-height:1.6;background:#F9F8F4;border-radius:12px;padding:14px 16px">';
       const obs=[];
       if(presup){ if(desvCosto>0)obs.push("El costo real superó el presupuesto en "+fmt(desvCosto)+" ("+desvPct.toFixed(0)+"%)."); else obs.push("El costo real quedó "+fmt(Math.abs(desvCosto))+" por debajo del presupuesto ("+Math.abs(desvPct).toFixed(0)+"%)."); } else obs.push("No hay presupuesto de mano de obra cargado para comparar el costo.");
