@@ -2434,7 +2434,7 @@
       h += '<span style="display:inline-flex;background:#F1F0EC;border-radius:9px;padding:3px;gap:2px">'
         + [['estacion','Estación'],['persona','Persona'],['proyecto','Proyecto'],['semana','Semana']].map(([k,lab])=>{
             const on = planiLente===k;
-            return '<button class="btn" onclick="planiLente=\''+k+'\';renderPlani()" style="border:0;background:'+(on?'#fff':'transparent')+';color:'+(on?'#2C2C2A':'#888780')+';font-size:12px;font-weight:550;padding:5px 12px;border-radius:7px;'+(on?'box-shadow:0 1px 3px rgba(0,0,0,.09)':'')+'">'+lab+'</button>';
+            return '<button class="btn" onclick="planiLente=\''+k+'\';renderPlani()" style="border:0;background:'+(on?'#185FA5':'transparent')+';color:'+(on?'#fff':'#888780')+';font-size:12px;font-weight:'+(on?'600':'550')+';padding:5px 12px;border-radius:7px;'+(on?'box-shadow:0 1px 2px rgba(0,0,0,.18)':'')+'">'+lab+'</button>';
           }).join('')
         + '</span>';
       h += '<span style="width:1px;height:22px;background:#E6E4DC;margin:0 2px"></span>';
@@ -3225,7 +3225,7 @@
       const horasDia = {};
       // Los contratistas son recurso tercerizado e ilimitado: pueden estar en varias
       // tareas el mismo día sin que sea sobreasignación. No cuentan para el aviso.
-      detalle.forEach(f => { if (f.ausente) return; const pp = personas.find(x => x.id === f.persona_real); if (pp && pp.tipo === "Contratista") return; const k = f.persona_real + "|" + f.fecha; horasDia[k] = (horasDia[k]||0) + (Number(f.horas_normales)||0); });
+      detalle.forEach(f => { if (f.ausente) return; if (f.es_extra) return; const pp = personas.find(x => x.id === f.persona_real); if (pp && pp.tipo === "Contratista") return; const k = f.persona_real + "|" + f.fecha; horasDia[k] = (horasDia[k]||0) + (Number(f.horas_normales)||0); });
 
       let h = '<p style="font-size:13px;color:#888780;margin-top:0">Registro real día por día de Base Neuquén. Editá lo que pasó: cargar horas trabajadas y extra, marcar ausencias. Los días anteriores a hoy son historia (🔒).</p>';
       h += '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;background:#FAFAF8;border:1px solid #EEECE4;border-radius:10px;padding:8px 12px">';
@@ -3398,7 +3398,7 @@
       // reales en simultáneo bajo la misma etiqueta, así que sumar sus horas no es un conflicto real.
       const proyOperAbierto = new Set(proyectosOperativos().filter(p=>p.estado!=="Cerrado").map(p=>p.id));
       const horasDia = {};
-      detalle.forEach(f => { if (f.ausente) return; if (f.estacion_real === SUP_MARK) return; if (!proyOperAbierto.has(f.proyecto_id)) return; if (!esDirecto(f.persona_real)) return; const k = f.persona_real + "|" + f.fecha; horasDia[k] = (horasDia[k]||0) + (Number(f.horas_normales)||0); });
+      detalle.forEach(f => { if (f.ausente) return; if (f.es_extra) return; if (f.estacion_real === SUP_MARK) return; if (!proyOperAbierto.has(f.proyecto_id)) return; if (!esDirecto(f.persona_real)) return; const k = f.persona_real + "|" + f.fecha; horasDia[k] = (horasDia[k]||0) + (Number(f.horas_normales)||0); });
       const exceso = (f) => !f.ausente && f.estacion_real !== SUP_MARK && horasDia[f.persona_real + "|" + f.fecha] > 8;
       const opcPersona = (sel) => personasHuella().map(p => '<option value="'+p.id+'" '+(p.id===sel?'selected':'')+'>'+p.nombre+'</option>').join('');
       const opcEst = (sel) => STKEYS.map(k => '<option value="'+k+'" '+(k===sel?'selected':'')+'>'+STATIONS[k].label+'</option>').join('');
@@ -4237,15 +4237,16 @@
           if(ga!==gb) return ga-gb;
           return nombrePersona(a).localeCompare(nombrePersona(b),"es");
         });
-      const cell={}; detHisto.forEach(f=>{ cell[f.persona_real+"|"+f.fecha]= f.ausente?"__aus":f.estacion_real; });
-      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0">Personas en filas, días en columnas, color por estación. <span style="background:#FBF0DE;color:#8A5410;border-radius:4px;padding:1px 5px;font-size:11px">motivo</span> = no disponible (vacaciones/licencia).</p><div style="display:flex;gap:8px;align-items:center">'+filtroHistoHTML+botonesExport("histo-print","histograma")+'</div></div><div id="histo-print"><div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:11px;min-width:'+(160+fechas.length*52)+'px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8">Persona</th>';
-      fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:50px">'+dm(d)+'</th>');
+      const cell={}; detHisto.forEach(f=>{ cell[f.persona_real+"|"+f.fecha]= f.ausente?{aus:true}:{est:f.estacion_real, sub:f.subtarea_real||""}; });
+      const _tt=s=>String(s||"").replace(/"/g,"&quot;"); // escape para el title (tooltip)
+      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0">Personas en filas, días en columnas, color por estación. <span style="background:#FBF0DE;color:#8A5410;border-radius:4px;padding:1px 5px;font-size:11px">motivo</span> = no disponible (vacaciones/licencia). <span style="color:#A8A69E">Pasá el mouse por una celda para ver la tarea completa.</span></p><div style="display:flex;gap:8px;align-items:center">'+filtroHistoHTML+botonesExport("histo-print","histograma")+'</div></div><div id="histo-print"><div style="overflow:auto;max-height:72vh"><table style="border-collapse:collapse;font-size:11px;min-width:'+(160+fechas.length*52)+'px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;top:0;z-index:6;background:#F1EFE8">Persona</th>';
+      fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:50px;position:sticky;top:0;z-index:5;background:#F1EFE8">'+dm(d)+'</th>');
       h+='</tr></thead><tbody>';
-      pers.forEach(pid=>{ const esContr=esDirectoH(pid)===1; h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 12px;font-weight:500;position:sticky;left:0;background:#fff;white-space:nowrap">'+nombrePersona(pid)+(esContr?' <span style="color:#A8A69E;font-weight:400" title="Contratista">◇</span>':'')+'</td>';
+      pers.forEach(pid=>{ const esContr=esDirectoH(pid)===1; h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 12px;font-weight:500;position:sticky;left:0;z-index:3;background:#fff;white-space:nowrap">'+nombrePersona(pid)+(esContr?' <span style="color:#A8A69E;font-weight:400" title="Contratista">◇</span>':'')+'</td>';
         fechas.forEach(d=>{ const t=cell[pid+"|"+d]; let c; const mot=tipoNoDispoEn(pid,d);
-          if(t==="__aus") c = mot ? chipNoDispo(mot) : '<span style="display:inline-block;width:100%;background:#FCEBEB;color:#A32D2D;border-radius:5px;padding:3px 0;font-size:9px">Ausente</span>';
-          else if(t===SUP_MARK) c='<span style="display:inline-block;width:100%;background:'+SUP_BG+';color:'+SUP_COLOR+';border-radius:5px;padding:3px 1px;font-size:8.5px">'+SUP_LABEL.slice(0,8)+'</span>';
-          else if(t&&STATIONS[t]) c='<span style="display:inline-block;width:100%;background:'+STATIONS[t].bg+';color:'+STATIONS[t].color+';border-radius:5px;padding:3px 1px;font-size:8.5px">'+STATIONS[t].label.slice(0,8)+'</span>';
+          if(t&&t.aus) c = mot ? chipNoDispo(mot) : '<span style="display:inline-block;width:100%;background:#FCEBEB;color:#A32D2D;border-radius:5px;padding:3px 0;font-size:9px">Ausente</span>';
+          else if(t&&t.est===SUP_MARK) c='<span title="'+_tt(SUP_LABEL+(t.sub?' · '+t.sub:''))+'" style="display:inline-block;width:100%;background:'+SUP_BG+';color:'+SUP_COLOR+';border-radius:5px;padding:3px 1px;font-size:8.5px">'+SUP_LABEL.slice(0,8)+'</span>';
+          else if(t&&t.est&&STATIONS[t.est]) c='<span title="'+_tt(STATIONS[t.est].label+(t.sub?' · '+t.sub:''))+'" style="display:inline-block;width:100%;background:'+STATIONS[t.est].bg+';color:'+STATIONS[t.est].color+';border-radius:5px;padding:3px 1px;font-size:8.5px">'+STATIONS[t.est].label.slice(0,8)+'</span>';
           else c = mot ? chipNoDispo(mot) : '<span style="color:#D3D1C7">—</span>';
           h+='<td style="padding:4px;text-align:center">'+c+'</td>'; });
         h+='</tr>';
@@ -4319,10 +4320,10 @@
       const cats=[...new Set(detH.map(f=>f.estacion_real||"—"))];
       const palette=["#E6F1FB|#185FA5","#E8F3DE|#3B6D11","#FAEEDA|#854F0B","#FBEAF0|#993556","#EFE7FB|#6B3FA0","#F2E8D8|#7A5C00","#E1F5EE|#0F6E56"];
       const colorDe={}; cats.forEach((c,i)=>{ colorDe[c]=palette[i%palette.length].split("|"); });
-      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0">Personas en filas, días en columnas, color por tarea. <span style="background:#FBF0DE;color:#8A5410;border-radius:4px;padding:1px 5px;font-size:11px">motivo</span> = no disponible (vacaciones/licencia).'+(soloTodos?' Con el filtro en «Todos», cada celda muestra la tarea y el IF del trailer.':'')+'</p><div style="display:flex;gap:8px;align-items:center">'+filtro+botonesExport("histon-print","histograma_neuquen")+'</div></div><div id="histon-print"><div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:11px;min-width:'+(160+fechas.length*(soloTodos?64:52))+'px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;background:#F1EFE8">Persona</th>';
-      fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:'+(soloTodos?62:50)+'px">'+dm(d)+'</th>');
+      let h='<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><p style="font-size:13px;color:#888780;margin:0">Personas en filas, días en columnas, color por tarea. <span style="background:#FBF0DE;color:#8A5410;border-radius:4px;padding:1px 5px;font-size:11px">motivo</span> = no disponible (vacaciones/licencia).'+(soloTodos?' Con el filtro en «Todos», cada celda muestra la tarea y el IF del trailer.':'')+' <span style="color:#A8A69E">Pasá el mouse por una celda para ver la tarea completa.</span></p><div style="display:flex;gap:8px;align-items:center">'+filtro+botonesExport("histon-print","histograma_neuquen")+'</div></div><div id="histon-print"><div style="overflow:auto;max-height:72vh"><table style="border-collapse:collapse;font-size:11px;min-width:'+(160+fechas.length*(soloTodos?64:52))+'px"><thead><tr style="background:#F1EFE8"><th style="text-align:left;padding:9px 12px;position:sticky;left:0;top:0;z-index:6;background:#F1EFE8">Persona</th>';
+      fechas.forEach(d=>h+='<th style="padding:9px 4px;min-width:'+(soloTodos?62:50)+'px;position:sticky;top:0;z-index:5;background:#F1EFE8">'+dm(d)+'</th>');
       h+='</tr></thead><tbody>';
-      pers.forEach(pid=>{ h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 12px;font-weight:500;position:sticky;left:0;background:#fff;white-space:nowrap">'+nombrePersona(pid)+'</td>';
+      pers.forEach(pid=>{ h+='<tr style="border-top:1px solid #F1EFE8"><td style="padding:8px 12px;font-weight:500;position:sticky;left:0;z-index:3;background:#fff;white-space:nowrap">'+nombrePersona(pid)+'</td>';
         fechas.forEach(d=>{ const t=cell[pid+"|"+d]; const mot=tipoNoDispoEn(pid,d); let c;
           if(t && t.aus) c = mot ? chipNoDispo(mot) : '<span style="display:inline-block;width:100%;background:#FCEBEB;color:#A32D2D;border-radius:5px;padding:3px 0;font-size:9px">Ausente</span>';
           else if(t){ const col=colorDe[t.tarea]||["#EEE","#555"]; const iffLine = soloTodos ? '<div style="font-size:8px;font-weight:700;opacity:.85;line-height:1.1">'+String(t.iff).replace(/</g,'&lt;')+'</div>' : ''; c='<span style="display:inline-block;width:100%;background:'+col[0]+';color:'+col[1]+';border-radius:5px;padding:3px 1px;font-size:8.5px" title="'+String(t.tarea).replace(/"/g,'&quot;')+(soloTodos?(' · IF '+String(t.iff).replace(/"/g,'&quot;')):'')+'">'+iffLine+String(t.tarea).slice(0,8)+'</span>'; }
