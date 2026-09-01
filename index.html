@@ -2605,7 +2605,7 @@
         STKEYS.forEach(k=>{
           const grp = planiVisibles.filter(b=>b.estacion===k).sort((a,b)=>(a.fecha_desde||'9999')<(b.fecha_desde||'9999')?-1:1);
           if(!grp.length) return;
-          h += '<div style="font-size:11px;color:#A8A69E;text-transform:uppercase;letter-spacing:.05em;font-weight:650;margin:14px 2px 5px">'+STATIONS[k].label+' <span style="color:#C4C2BA;font-weight:500">· '+grp.length+'</span></div>';
+          h += '<div style="font-size:11px;color:'+STATIONS[k].color+';text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin:14px 2px 5px">'+STATIONS[k].label+' <span style="color:#A8A69E;font-weight:500">· '+grp.length+'</span></div>';
           grp.forEach(b=>{ h += filaBloque(b, false, true); });
         });
       } else if(planiLente==='proyecto'){
@@ -2614,7 +2614,7 @@
           const pr = proyectos.find(p=>p.id===pid);
           const grp = planiVisibles.filter(b=>b.proyecto_id===pid).sort((a,b)=>(a.fecha_desde||'9999')<(b.fecha_desde||'9999')?-1:1);
           if(!grp.length) return;
-          h += '<div style="font-size:11px;color:#A8A69E;text-transform:uppercase;letter-spacing:.05em;font-weight:650;margin:14px 2px 5px">'+(pr?pr.nombre:'—')+' <span style="color:#C4C2BA;font-weight:500">· '+grp.length+'</span></div>';
+          h += '<div style="font-size:11px;color:#185FA5;text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin:14px 2px 5px">'+(pr?pr.nombre:'—')+' <span style="color:#A8A69E;font-weight:500">· '+grp.length+'</span></div>';
           grp.forEach(b=>{ h += filaBloque(b, true, false); });
         });
         // bloques sin proyecto asignado
@@ -2624,12 +2624,12 @@
         personasHuella().forEach(p=>{
           const grp = planiVisibles.filter(b=>(planiPers[b.id]||[]).includes(p.id)).sort((a,b)=>(a.fecha_desde||'9999')<(b.fecha_desde||'9999')?-1:1);
           if(!grp.length) return;
-          h += '<div style="font-size:11px;color:#A8A69E;text-transform:uppercase;letter-spacing:.05em;font-weight:650;margin:14px 2px 5px">'+p.nombre+' <span style="color:#C4C2BA;font-weight:500">· '+grp.length+'</span></div>';
+          h += '<div style="font-size:11px;color:#4A3F7A;text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin:14px 2px 5px">'+p.nombre+' <span style="color:#A8A69E;font-weight:500">· '+grp.length+'</span></div>';
           grp.forEach(b=>{ h += filaBloque(b, true, true); });
         });
         // estaciones sin nadie asignado (para que no desaparezcan de la vista por persona)
         const vacios = planiVisibles.filter(b=>!(planiPers[b.id]||[]).length);
-        if(vacios.length){ h += '<div style="font-size:11px;color:#A8A69E;text-transform:uppercase;letter-spacing:.05em;font-weight:650;margin:14px 2px 5px">Sin personal asignado</div>'; vacios.forEach(b=>{ h += filaBloque(b, true, true); }); }
+        if(vacios.length){ h += '<div style="font-size:11px;color:#6B6A64;text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin:14px 2px 5px">Sin personal asignado</div>'; vacios.forEach(b=>{ h += filaBloque(b, true, true); }); }
       }
       // expone la lista visible para el botón "Expandir todo"
       window.__planiVisiblesIds = planiVisibles.map(b=>b.id);
