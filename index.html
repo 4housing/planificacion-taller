@@ -109,7 +109,9 @@
     // Proyecto Supabase del PORTAL 4housing (unificado, migración 2026-07-19).
     // La app comparte proyecto y origen con el portal → comparte sesión (SSO).
     const SUPABASE_URL = "https://wcpkpwxhqdcdljfwzcmy.supabase.co";
-    const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndjcGtwd3hocWRjZGxqZnd6Y215Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNDM4NDAsImV4cCI6MjA5NjYxOTg0MH0.MSTk46VAwdAsn5qNBdrHmGIiLYyN-rAyAZC72xZW3D4";
+    // Clave pública del proyecto (publishable). Reemplaza a la anon legacy, que
+    // queda para desactivar una vez migradas todas las apps del proyecto.
+    const SUPABASE_ANON = "sb_publishable_08decRYdCRUdtO5zogvJVg_VEBCN9pf";
     const PORTAL_URL = "/portal/";
     function irAlPortal(){ window.location.href = PORTAL_URL; }
     let sb = null;
