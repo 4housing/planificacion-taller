@@ -219,10 +219,15 @@
       const tit = document.getElementById("appTitulo"); if (tit) tit.textContent = conf.titulo;
       const sub = document.getElementById("appSub"); if (sub) sub.textContent = conf.sub;
       const sel = document.getElementById("sedeSel"); if (sel) sel.value = SEDE;
+      // Sacar del selector la opción de Neuquén si el usuario no tiene acceso.
+      if (sel && typeof puedeVerNeuquen === "function" && !puedeVerNeuquen()) {
+        const optNqn = sel.querySelector('option[value="neuquen"]'); if (optNqn) optNqn.remove();
+      }
     }
 
     function cambiarSede(s) {
       if (!SEDES[s]) return;
+      if (s === "neuquen" && typeof puedeVerNeuquen === "function" && !puedeVerNeuquen()) { setEstado("No tenés acceso a la Base Neuquén.", "err"); return; }
       SEDE = s;
       try { localStorage.setItem("sede_activa", s); } catch(e){}
       tab = SEDES[s].tabDefault;
@@ -5426,7 +5431,11 @@
       }
       miPerfil = {
         rol: rol,
-        ve_sueldos: esDir || !!(ps && ps.permisos && ps.permisos.ve_sueldos === true)
+        ve_sueldos: esDir || !!(ps && ps.permisos && ps.permisos.ve_sueldos === true),
+        // Acceso a la Base Neuquén: por defecto TODOS lo tienen (comportamiento
+        // histórico). Se restringe solo a quien tenga permisos.ve_neuquen === false.
+        // Dirección (admin) siempre puede.
+        ve_neuquen: esDir || !(ps && ps.permisos && ps.permisos.ve_neuquen === false)
       };
       document.getElementById("login").style.display = "none";
       document.getElementById("app").style.display = "block";
@@ -5434,6 +5443,8 @@
       aplicarPermisos();
       // inicializar sede activa y su set de pestañas
       if (!SEDES[SEDE]) SEDE = "la_huella";
+      // Sin acceso a Neuquén: no arrancar ahí aunque quedara guardado en localStorage.
+      if (SEDE === "neuquen" && !puedeVerNeuquen()) SEDE = "la_huella";
       tab = SEDES[SEDE].tabDefault;
       renderTabs();
       // tab inicial: si no ve sueldos y estaba en personal, mandarlo a proyectos
@@ -5442,6 +5453,7 @@
     }
     // ve_sueldos ahora viene resuelto desde perfiles_sector.permisos (o dirección)
     function puedeVerSueldos() { return miPerfil.ve_sueldos === true; }
+    function puedeVerNeuquen() { return miPerfil.ve_neuquen === true; }
     function esAdmin() { return miPerfil.rol === "admin"; }
     function puedeMarcarCotizacion() { return miPerfil.rol === "admin" || miPerfil.rol === "coordinador"; }
     // Registra una acción en el log de actividad. No bloquea ni interrumpe si falla
