@@ -210,10 +210,10 @@
     function renderTabs() {
       const conf = SEDES[SEDE];
       const bar = document.getElementById("tabsBar");
-      const verPers = (typeof puedeVerSueldos === "function") ? puedeVerSueldos() : true;
       const admin = (typeof esAdmin === "function") ? esAdmin() : false;
       if (bar) bar.innerHTML = conf.tabs.map(t => {
-        const oculta = ((t.id === "personal" || t.id === "traslados") && !verPers) || (t.esAdmin && !admin);
+        // Visión por sección + Actividad sigue siendo admin-only.
+        const oculta = !puedeVerSeccion(seccionDeTab(t.id)) || (t.esAdmin && !admin);
         return '<button class="tab'+(t.id===tab?' active':'')+'" id="tab-'+t.id+'" onclick="cambiarTab(\''+t.id+'\')" style="--c:'+t.c+(oculta?';display:none':'')+'">'+t.label+'</button>';
       }).join("");
       const tit = document.getElementById("appTitulo"); if (tit) tit.textContent = conf.titulo;
@@ -377,6 +377,7 @@
 
     async function cargar() {
       setEstado("Cargando…", "cargando");
+      actualizarBannerSoloLectura(); // cartel "solo lectura" según la sección actual
       draftPr = {}; // limpiar borrador de Proyectos en cada recarga completa
       // ===== Pestañas de Base Neuquén =====
       if (tab === "nqn_dash") {
@@ -5429,13 +5430,20 @@
         errDiv.style.display = "block";
         return;
       }
+      const _perm = (ps && ps.permisos) || {};
       miPerfil = {
         rol: rol,
-        ve_sueldos: esDir || !!(ps && ps.permisos && ps.permisos.ve_sueldos === true),
+        esDir: esDir,
+        ve_sueldos: esDir || _perm.ve_sueldos === true,
         // Acceso a la Base Neuquén: por defecto TODOS lo tienen (comportamiento
         // histórico). Se restringe solo a quien tenga permisos.ve_neuquen === false.
         // Dirección (admin) siempre puede.
-        ve_neuquen: esDir || !(ps && ps.permisos && ps.permisos.ve_neuquen === false)
+        ve_neuquen: esDir || !(_perm.ve_neuquen === false),
+        // Etapa 2 · listas por sección. null = sin lista guardada → default
+        // retrocompatible (ver todo / editar todo). Se activan cuando dirección
+        // configura accesos desde el panel del portal.
+        ver: Array.isArray(_perm.ver) ? _perm.ver : null,
+        editar: Array.isArray(_perm.editar) ? _perm.editar : null
       };
       document.getElementById("login").style.display = "none";
       document.getElementById("app").style.display = "block";
@@ -5455,7 +5463,100 @@
     function puedeVerSueldos() { return miPerfil.ve_sueldos === true; }
     function puedeVerNeuquen() { return miPerfil.ve_neuquen === true; }
     function esAdmin() { return miPerfil.rol === "admin"; }
-    function puedeMarcarCotizacion() { return miPerfil.rol === "admin" || miPerfil.rol === "coordinador"; }
+    function puedeMarcarCotizacion() { return miPerfil.rol === "admin" || miPerfil.rol === "coordinador" || miPerfil.rol === "editor"; }
+
+    // ===== Etapa 2 · Permisos por sección (Ver / Editar) =====
+    // Catálogo de secciones controlables (coincide con el del panel del portal).
+    // Neuquén se maneja como una sección única ('neuquen'); Actividad sigue siendo
+    // admin-only por separado.
+    const SECCIONES_PLAN = ["dash","proyectos","personal","dispo","feriados","plani","detalle","gantt","histo","parte","informe","costos","traslados","actividad","neuquen"];
+    // Secciones con edición real (donde tiene sentido el cartel "solo lectura").
+    const SECCIONES_EDITABLES = new Set(["proyectos","personal","dispo","feriados","plani","detalle","traslados","neuquen"]);
+    // Mapea un id de pestaña (incluye las nqn_*) a su sección del catálogo.
+    function seccionDeTab(t){
+      if (!t) return null;
+      if (t.indexOf("nqn_") === 0) return "neuquen";
+      if (t === "hue_actividad") return "actividad";
+      return t;
+    }
+    // Conjunto de secciones VISIBLES. null = todas (dirección). Sin lista guardada →
+    // default histórico: todo, salvo lo que ya restringían ve_sueldos/ve_neuquen.
+    function verSet(){
+      if (miPerfil.esDir) return null;
+      if (Array.isArray(miPerfil.ver)) return new Set(miPerfil.ver);
+      const s = new Set(SECCIONES_PLAN);
+      if (miPerfil.ve_sueldos !== true) { s.delete("personal"); s.delete("traslados"); }
+      if (miPerfil.ve_neuquen === false) s.delete("neuquen");
+      return s;
+    }
+    // Conjunto de secciones EDITABLES. null = todas. 'lector'/'lectura' → ninguna.
+    // Sin lista guardada → default histórico: edita todo (los usuarios actuales no
+    // pierden edición hasta que dirección les configure accesos en el panel).
+    function editSet(){
+      if (miPerfil.esDir) return null;
+      if (miPerfil.rol === "lector" || miPerfil.rol === "lectura") return new Set();
+      if (Array.isArray(miPerfil.editar)) return new Set(miPerfil.editar);
+      return null;
+    }
+    function puedeVerSeccion(sec){ if (!sec) return true; const s = verSet(); return s === null || s.has(sec); }
+    function puedeEditarSeccion(sec){ if (!sec) return true; const s = editSet(); return s === null || s.has(sec); }
+    function edicionPermitidaActual(){ return puedeEditarSeccion(seccionDeTab(tab)); }
+
+    // Guard de escritura: si la sección actual no es editable, bloquea insert/update/
+    // upsert/delete sin tocar la base (la carga de datos es solo lectura, así que esto
+    // no interfiere con ver). El log de actividad siempre se permite.
+    const TABLAS_LIBRES_EDICION = new Set(["planificacion_actividad_log"]);
+    function instalarGuardEdicion(){
+      if (!sb || sb.__guardEdicion) return;
+      const _from = sb.from.bind(sb);
+      sb.from = function(tabla){
+        const qb = _from(tabla);
+        if (TABLAS_LIBRES_EDICION.has(tabla)) return qb;
+        ["insert","update","upsert","delete"].forEach(m => {
+          if (typeof qb[m] !== "function") return;
+          const orig = qb[m].bind(qb);
+          qb[m] = function(){
+            if (!edicionPermitidaActual()){
+              try { setEstado("Solo lectura: no tenés permiso para editar esta sección.", "err"); } catch(e){}
+              return bloqueoBuilder("Solo lectura: no tenés permiso de edición en esta sección.");
+            }
+            return orig.apply(qb, arguments);
+          };
+        });
+        return qb;
+      };
+      sb.__guardEdicion = true;
+    }
+    // Builder falso: soporta encadenar (.eq/.select/.single/…) y al await resuelve como
+    // un error, sin escribir nada.
+    function bloqueoBuilder(msg){
+      const res = { data: null, error: { message: msg } };
+      const p = new Proxy(function(){}, {
+        get(_t, prop){
+          if (prop === "then") return (resolve) => { resolve(res); return Promise.resolve(res); };
+          if (prop === "catch") return () => p;
+          if (prop === "finally") return (cb) => { try { cb && cb(); } catch(e){} return p; };
+          return () => p;
+        },
+        apply(){ return p; }
+      });
+      return p;
+    }
+    // Cartel "solo lectura" arriba del contenido, según la sección actual.
+    function actualizarBannerSoloLectura(){
+      const sec = seccionDeTab(tab);
+      const mostrar = SECCIONES_EDITABLES.has(sec) && !puedeEditarSeccion(sec);
+      let b = document.getElementById("bannerSoloLectura");
+      if (!mostrar){ if (b) b.style.display = "none"; return; }
+      if (!b){
+        b = document.createElement("div");
+        b.id = "bannerSoloLectura";
+        b.style.cssText = "background:#FCF4E6;border:1px solid #E9D8B0;color:#8A6D1F;border-radius:9px;padding:8px 12px;margin-bottom:14px;font-size:12.5px";
+        if (contenido && contenido.parentNode) contenido.parentNode.insertBefore(b, contenido);
+      }
+      b.textContent = "👁 Solo lectura — podés ver esta sección pero no editarla. Si necesitás editar, pedile acceso a dirección.";
+      b.style.display = "";
+    }
     // Registra una acción en el log de actividad. No bloquea ni interrumpe si falla
     // (el log es auxiliar; un error acá nunca debe frenar la operación real del usuario).
     async function registrarLog(accion, entidad, detalle){
@@ -5484,6 +5585,7 @@
         return;
       }
       sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+      instalarGuardEdicion(); // Etapa 2: bloquear escrituras en secciones no editables
       initAuth();
     });
   </script>
