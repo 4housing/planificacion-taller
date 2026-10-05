@@ -199,6 +199,7 @@
           { id:"nqn_parte", label:"Parte diario", c:"#D9F0E6" },
           { id:"nqn_stock", label:"Stock", c:"#FAEEDA" },
           { id:"nqn_informe", label:"Informe por período", c:"#F7ECDA" },
+          { id:"nqn_costos", label:"Tablero", c:"#EDE9F6" },
           { id:"nqn_personal", label:"Personal", c:"#FBEAF0" },
           { id:"personal", label:"Personal y tarifas", c:"#FAEEDA" },
           { id:"nqn_actividad", label:"Actividad", c:"#EDEBE4", esAdmin:true }
@@ -427,6 +428,14 @@
         { const { data, error } = await sb.from("planificacion_detalle_diario").select("*").eq("sede","neuquen"); if (error) return errLoad(error); detalle = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0); }
         setEstado("✓ Datos cargados.", "ok");
         renderInformePeriodo();
+        return;
+      }
+      if (tab === "nqn_costos") {
+        await asegurarBase(); // personas, feriados (multiplicador de extras) e historial de valor-hora
+        { const { data } = await sb.from("planificacion_trailers").select("*").eq("sede","neuquen"); trailers = (data||[]).sort((a,b)=> (a.codigo||"").localeCompare(b.codigo||"", "es", {numeric:true})); }
+        { const { data, error } = await sb.from("planificacion_detalle_diario").select("*").eq("sede","neuquen"); if (error) return errLoad(error); detalle = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0); }
+        setEstado("\u2713 Tablero · Base Neuquén.", "ok");
+        renderCostoNqn();
         return;
       }
       if (tab === "nqn_personal") {
@@ -4442,6 +4451,7 @@
       if(infoExplica.has(id)) infoExplica.delete(id); else infoExplica.add(id);
       // Re-renderizar la pantalla ACTUAL (el colapsable se usa en Informe, Tablero, etc.).
       if(tab==="costos") renderTablero();
+      else if(tab==="nqn_costos") renderCostoNqn();
       else if(tab==="dash") renderDash();
       else if(tab==="informe") renderInforme();
       else renderInforme();
@@ -5136,7 +5146,7 @@
 
       h += '<div id="costos-print">';
       if(!filas.length){
-        h += '<p style="font-size:13px;color:#A8A69E;padding:10px 2px">No hay ejecución real de personal directo en este período. Probá con otro corte o período, o esperá a que se registren jornadas.</p></div>';
+        h += '<p style="font-size:13px;color:#A8A69E;padding:10px 2px">No hay ejecución real de personal directo en este período. Probá con otro corte o período, o esperá a que se registren jornadas.</p>' + cppCard(base, filas) + '</div>';
         contenido.innerHTML = h; return;
       }
 
@@ -5285,7 +5295,155 @@
       h += '</tbody></table>';
       h += bloqueComoSeCalcula('tablero-oper', 'Mismos criterios que los KPIs, aplicados a las jornadas de cada persona. H. norm. = jornales × 8.');
       h += '</div>';
+      h += cppCard(base, filas); // costo por persona y proyecto + día a día
       h += '</div>'; // costos-print
+      contenido.innerHTML = h;
+    }
+    // ---- COSTO POR PERSONA Y PROYECTO + DETALLE DÍA A DÍA (solo lectura) ----
+    // Misma fórmula que el resto del Tablero: cada jornada se valoriza con tabCostoDeFilas().
+    // Solo personal Directo y solo ejecución real (hasta ayer), igual que los KPIs.
+    // La Huella agrupa por proyecto; Neuquén (su detalle no tiene proyecto) agrupa por trailer.
+    let cppModo = "tablero";      // "tablero" = período del Tablero | "rango" = desde/hasta propio
+    let cppDesde = "", cppHasta = "";
+    let cppTrailer = "";          // filtro de trailer (solo Neuquén)
+    let cppAbiertos = new Set();  // claves persona|grupo con el día a día desplegado
+
+    function cppRangoInicial(){
+      const ayer = fechaStr(new Date(Date.now()-86400000));
+      if(!cppHasta) cppHasta = ayer;
+      if(!cppDesde) cppDesde = cppHasta.slice(0,8)+"01"; // 1° del mes de "hasta"
+    }
+    function cppRerender(){ if(SEDE==="neuquen") renderCostoNqn(); else renderTablero(); }
+    function cppSetFecha(cual, v){ if(cual==="d") cppDesde=v; else cppHasta=v; cppRerender(); }
+    function cppSetModo(m){ cppModo=m; cppRerender(); }
+    function cppToggle(i){
+      const el=document.getElementById("cpp-d-"+i); if(!el) return;
+      const abrir = el.style.display==="none";
+      el.style.display = abrir ? "" : "none";
+      const k=el.getAttribute("data-cpp-k"); if(abrir) cppAbiertos.add(k); else cppAbiertos.delete(k);
+      const ic=document.getElementById("cpp-i-"+i); if(ic) ic.textContent = abrir ? "▾" : "▸";
+    }
+    function cppTodos(abrir){
+      document.querySelectorAll("[data-cpp-k]").forEach(el=>{
+        el.style.display = abrir ? "" : "none";
+        const k=el.getAttribute("data-cpp-k"); if(abrir) cppAbiertos.add(k); else cppAbiertos.delete(k);
+      });
+      document.querySelectorAll("[data-cpp-i]").forEach(ic=>{ ic.textContent = abrir ? "▾" : "▸"; });
+    }
+
+    // universo: jornadas ya filtradas (directos, reales, sede y proyecto del Tablero).
+    // filasPeriodo: las del período elegido arriba en el Tablero (null en Neuquén: no hay Tablero arriba).
+    function cppCard(universo, filasPeriodo, opts){
+      const esNqn = !!(opts && opts.nqn);
+      const modo = (esNqn || !filasPeriodo) ? "rango" : cppModo;
+      cppRangoInicial();
+      const filas = modo==="tablero" ? filasPeriodo : universo.filter(f => f.fecha>=cppDesde && f.fecha<=cppHasta);
+      const grupoDe = f => esNqn ? (f.trailer_id||"") : (f.proyecto_id||"");
+      const nombreGrupo = g => esNqn ? (g ? nombreTrailer(g) : "(sin trailer)") : (g ? nombreProy(g) : "(sin proyecto)");
+      const etiqGrupo = esNqn ? "Trailer" : "Proyecto";
+      const fmt = n => "$"+Math.round(n).toLocaleString("es-AR");
+      const n1 = n => (Math.round(n*10)/10).toLocaleString("es-AR");
+      const nomEst = f => f.estacion_real===SUP_MARK ? SUP_LABEL : (!esNqn && STATIONS[f.estacion_real] ? STATIONS[f.estacion_real].label : (f.estacion_real||"—"));
+
+      // persona -> grupo -> jornadas
+      const porPers = {};
+      filas.forEach(f=>{
+        const p=f.persona_real, g=grupoDe(f);
+        if(!porPers[p]) porPers[p]={};
+        if(!porPers[p][g]) porPers[p][g]=[];
+        porPers[p][g].push(f);
+      });
+      const personasArr = Object.entries(porPers).map(([pid,grupos])=>{
+        const todas = [].concat(...Object.values(grupos));
+        const gr = Object.entries(grupos).map(([g,fs])=>({ g, fs: fs.slice().sort((a,b)=> a.fecha<b.fecha?-1:a.fecha>b.fecha?1:0), a: tabCostoDeFilas(fs) }))
+          .sort((x,y)=> y.a.costoReal - x.a.costoReal);
+        return { pid, nombre: nombrePersona(pid), a: tabCostoDeFilas(todas), gr };
+      }).sort((x,y)=> y.a.costoReal - x.a.costoReal);
+      const tot = tabCostoDeFilas(filas);
+
+      const btnSeg = (on, lab, js)=> '<button class="btn" onclick="'+js+'" style="border:0;background:'+(on?'#fff':'transparent')+';color:'+(on?'#2C2C2A':'#888780')+';font-size:12.5px;font-weight:550;padding:6px 12px;border-radius:7px">'+lab+'</button>';
+      let h = '<div class="card" style="margin-top:14px"><h3 style="font-size:14px;margin:0 0 3px;font-weight:650">Costo por persona y '+etiqGrupo.toLowerCase()+' · detalle día a día</h3>'
+        + '<p style="font-size:11.5px;color:#A8A69E;margin:0 0 10px">Solo personal Directo y solo lo ejecutado hasta ayer. Tocá una fila de '+etiqGrupo.toLowerCase()+' para ver las tareas día por día.</p>';
+
+      // ---- controles ----
+      h += '<div class="no-print" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px">';
+      if(!esNqn){
+        h += '<span style="display:inline-flex;background:#F1F0EC;border-radius:9px;padding:3px;gap:2px">'
+          + btnSeg(modo==="tablero", 'Período del Tablero', "cppSetModo('tablero')")
+          + btnSeg(modo==="rango", 'Rango propio', "cppSetModo('rango')") + '</span>';
+      }
+      if(modo==="rango"){
+        h += '<label style="font-size:12px;color:#888780">Desde<br><input type="date" value="'+cppDesde+'" onchange="cppSetFecha(\'d\',this.value)" style="margin-top:3px;width:auto"></label>';
+        h += '<label style="font-size:12px;color:#888780">Hasta<br><input type="date" value="'+cppHasta+'" onchange="cppSetFecha(\'h\',this.value)" style="margin-top:3px;width:auto"></label>';
+      }
+      if(esNqn){
+        h += '<label style="font-size:12px;color:#888780">Trailer<br><select onchange="cppTrailer=this.value;renderCostoNqn()" style="margin-top:3px;width:auto"><option value="">Todos</option>'
+          + trailers.map(t=>'<option value="'+t.id+'" '+(t.id===cppTrailer?'selected':'')+'>'+nombreTrailer(t.id)+'</option>').join('') + '</select></label>';
+      }
+      h += '<span style="margin-left:auto;display:flex;gap:6px"><button class="btn btn-sec btn-sm" onclick="cppTodos(true)">Desplegar todo</button><button class="btn btn-sec btn-sm" onclick="cppTodos(false)">Plegar todo</button></span>';
+      h += '</div>';
+      h += '<div style="font-size:12px;color:#888780;margin-bottom:8px">'
+        + (modo==="tablero" ? ('Período: '+tabEtiquetaPeriodo(tabPeriodo,tabCorte)) : ('Rango: '+dmy(cppDesde)+' – '+dmy(cppHasta)))
+        + (!esNqn ? ' · Proyecto: '+(tabProy ? nombreProy(tabProy) : 'todos') : (cppTrailer ? ' · Trailer: '+nombreTrailer(cppTrailer) : ''))
+        + '</div>';
+
+      if(!filas.length){
+        h += '<p style="font-size:13px;color:#A8A69E;padding:6px 2px">No hay jornadas reales de personal Directo en este '+(modo==="tablero"?'período':'rango')+'.</p></div>';
+        return h;
+      }
+
+      // ---- tabla persona × grupo ----
+      const th = (c,i)=>'<th style="text-align:'+(i<2?'left':'right')+';padding:8px 10px;border-bottom:1px solid #E6E4DC;font-size:11px;color:#A8A69E;text-transform:uppercase;letter-spacing:.03em">'+c+'</th>';
+      const tdR = v => '<td style="text-align:right;padding:7px 10px;font-variant-numeric:tabular-nums">'+v+'</td>';
+      h += '<div style="overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:720px"><thead><tr>'
+        + ['Persona',etiqGrupo,'Jornales','H. norm.','H. extra','Ausencias','Costo real'].map(th).join('') + '</tr></thead><tbody>';
+      let idx = 0;
+      personasArr.forEach(p=>{
+        h += '<tr style="background:#F6F5F0;font-weight:650;border-top:1px solid #E6E4DC">'
+          + '<td style="padding:7px 10px">'+p.nombre+'</td><td style="padding:7px 10px;color:#888780;font-weight:500">'+p.gr.length+' '+(esNqn?'trailer':'proyecto')+(p.gr.length===1?'':'s')+'</td>'
+          + tdR(n1(p.a.jornales)) + tdR(n1(p.a.jornales*8)+' h') + tdR(n1(p.a.hsExtra)+' h') + tdR(p.a.ausencias) + tdR(fmt(p.a.costoReal)) + '</tr>';
+        p.gr.forEach(gr=>{
+          const i = idx++;
+          const k = p.pid+'|'+gr.g;
+          const abierto = cppAbiertos.has(k);
+          h += '<tr onclick="cppToggle('+i+')" style="cursor:pointer;border-top:1px solid #F4F2EC" onmouseover="this.style.background=\'#F3F0FA\'" onmouseout="this.style.background=\'\'" title="Ver el día a día">'
+            + '<td></td><td style="padding:7px 10px"><span id="cpp-i-'+i+'" data-cpp-i="1" style="display:inline-block;width:14px;color:#888780">'+(abierto?'▾':'▸')+'</span>'+nombreGrupo(gr.g)+'</td>'
+            + tdR(n1(gr.a.jornales)) + tdR(n1(gr.a.jornales*8)+' h') + tdR(n1(gr.a.hsExtra)+' h') + tdR(gr.a.ausencias) + tdR(fmt(gr.a.costoReal)) + '</tr>';
+          // ---- día a día ----
+          h += '<tr id="cpp-d-'+i+'" data-cpp-k="'+k+'" style="'+(abierto?'':'display:none')+'"><td></td><td colspan="6" style="padding:4px 10px 12px">'
+            + '<table style="width:100%;border-collapse:collapse;font-size:12px;background:#FCFBF8;border:1px solid #EEECE4;border-radius:8px"><thead><tr>'
+            + ['Fecha',(esNqn?'Tarea':'Estación'),(esNqn?'Subtarea':'Tarea')].concat(esNqn?[]:['Módulos']).concat(['H. norm.','H. extra','Valor-hora','Costo']).map((c,j)=>'<th style="text-align:'+(j<(esNqn?3:4)?'left':'right')+';padding:6px 8px;font-size:10.5px;color:#A8A69E;text-transform:uppercase">'+c+'</th>').join('')
+            + '</tr></thead><tbody>';
+          gr.fs.forEach(f=>{
+            const c = tabCostoDeFilas([f]);
+            const vh = costoHora(f.persona_real, f.fecha);
+            const hp = (f.horas_plan!=null?Number(f.horas_plan):Number(f.horas_normales)||0);
+            const tag = f.es_extra ? ' <span style="background:#BA7517;color:#fff;font-size:9px;padding:1px 5px;border-radius:5px;font-weight:600">EXTRA</span>' : '';
+            const td = (v,r)=>'<td style="padding:5px 8px;border-top:1px solid #F1EFE8;'+(r?'text-align:right;font-variant-numeric:tabular-nums':'')+'">'+v+'</td>';
+            h += '<tr'+(f.ausente?' style="background:#FCEBEB"':'')+'>'
+              + td(dmy(f.fecha)+tag)
+              + (f.ausente
+                  ? td('<span style="color:#A32D2D">Ausente (jornada pagada)</span>') + td('—') + (esNqn?'':td('—')) + td(n1(hp)+' h', true) + td('—', true)
+                  : td(nomEst(f)) + td(f.estacion_real===SUP_MARK ? (f.subtarea_real||'Supervisión de proyecto') : (f.subtarea_real||'—')) + (esNqn?'':td(f.modulos_real||'—')) + td(n1(Number(f.horas_normales)||0)+' h', true) + td((Number(f.horas_extra)||0) ? n1(Number(f.horas_extra))+' h ×'+String(multExtra(f.fecha)).replace('.',',') : '—', true))
+              + td(fmt(vh), true) + td(fmt(c.costoReal), true) + '</tr>';
+          });
+          h += '</tbody></table></td></tr>';
+        });
+      });
+      h += '<tr style="border-top:2px solid #E6E4DC;font-weight:700"><td style="padding:8px 10px">Total</td><td style="padding:8px 10px;color:#888780;font-weight:500">'+personasArr.length+' persona'+(personasArr.length===1?'':'s')+'</td>'
+        + tdR(n1(tot.jornales)) + tdR(n1(tot.jornales*8)+' h') + tdR(n1(tot.hsExtra)+' h') + tdR(tot.ausencias) + tdR(fmt(tot.costoReal)) + '</tr>';
+      h += '</tbody></table></div>';
+      h += bloqueComoSeCalcula('tablero-cpp', 'Cada jornada se valoriza igual que en los KPIs del Tablero: <b>horas normales × valor-hora del mes</b> + <b>horas extra × valor-hora × 1,5</b> (lun-sáb) o <b>× 2</b> (domingos y feriados). Las <b>ausencias</b> del personal Directo (mensualizado) suman la jornada planificada como pagada. Jornales = horas normales ÷ 8. El total de la persona es la suma de sus '+(esNqn?'trailers':'proyectos')+'.');
+      h += '</div>';
+      return h;
+    }
+
+    // Neuquén: "Tablero" de la sede = esta misma tabla, agrupada por trailer y con rango propio.
+    function renderCostoNqn(){
+      let universo = detalle.filter(f => f.sede==="neuquen" && esDirecto(f.persona_real) && esFechaReal(f.fecha));
+      if(cppTrailer) universo = universo.filter(f => f.trailer_id===cppTrailer);
+      let h = '<div class="no-print" style="display:flex;justify-content:flex-end;margin-bottom:10px">'+botonesExport("costos-nqn-print","tablero_neuquen")+'</div>';
+      h += '<div id="costos-nqn-print">' + cppCard(universo, null, { nqn:true }) + '</div>';
       contenido.innerHTML = h;
     }
     // ---- Disparador: traslado de presupuesto a Compras (fase 3) ----
