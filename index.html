@@ -508,7 +508,8 @@
         if (!proyectos.length) { const { data } = await sb.from("planificacion_proyectos").select("*"); proyectos = data || []; }
         { const { data, error } = await sb.from("planificacion_presupuesto_compras").select("*").order("actualizado_en", { ascending: false }).limit(1); if (error) return errLoad(error); presupuestoCompras = (data && data[0]) || null; }
         { const { data, error } = await sb.from("planificacion_traslados_compras").select("*").order("creado_en", { ascending: false }); if (error) return errLoad(error); traslados = data || []; }
-        setEstado("\u2713 " + traslados.length + " traslado(s).", "ok"); renderTraslados();
+        { const { data, error } = await sb.from("compras_gp_traslados_mo").select("*").order("creado_en", { ascending: false }); if (!error) trasladosMO = data || []; }   // tolerante: si la tabla no est\u00e1, no rompe la pesta\u00f1a
+        setEstado("\u2713 " + traslados.length + " traslado(s) \u00b7 " + trasladosMO.length + " de MO por proyecto.", "ok"); renderTraslados();
       } else if (tab === "proyectos") {
         const { data, error } = await sb.from("planificacion_proyectos").select("*"); if (error) return errLoad(error);
         proyectos = data || []; setEstado("\u2713 " + proyectos.length + " proyecto(s).", "ok"); renderProyectos();
@@ -574,6 +575,20 @@
     function totalTrasladado() { return trasladosActivos().reduce((s, t) => s + (Number(t.monto) || 0), 0); }
     function disponibleCompras() { return (presupuestoCompras ? Number(presupuestoCompras.monto) || 0 : 0) - totalTrasladado(); }
     let solpAbierto = null; // id del traslado cuya SOLP se está mostrando (null = ver la lista)
+    /* ---- Fase 5 · Traslados de MO por proyecto (libro mayor compartido con Compras) ---- */
+    // Tabla compartida compras_gp_traslados_mo (misma que opera Compras). Overlay: no toca
+    // la línea base; el trigger de Compras recalcula el presupuesto_mo vigente de cada proyecto.
+    let trasladosMO = [];        // filas de compras_gp_traslados_mo
+    let trasMoNuevo = false;     // toggle del formulario de alta
+    const TRAS_MO_DIR = { mod_a_compras:"MOD → Compras (tercerizado)", compras_a_mod:"Compras → MOD (internalizado)" };
+    const TRAS_MO_EST = {
+      propuesto: { label:"Propuesto", color:"#BA7517", bg:"#FCF3E3" },
+      aplicado:  { label:"Aplicado",  color:"#3B6D11", bg:"#E8F3DE" },
+      revertido: { label:"Revertido", color:"#888780", bg:"#F1EFE8" }
+    };
+    // Webhook Teams del canal de Compras (URL firmada de Power Automate, pública como la de cobranzas).
+    const TRASLADO_WEBHOOK_COMPRAS = "https://defaultc408b6d8ae0b4d309056da52e18116.c4.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/12/workflows/0b3186fa2d4646b28511363d9c37268c/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=kA1RapaRv0cMHBWebxt3-AdjtH1ZrE7CxCFAdYLtVeU";
+    function escT(s){ return String(s==null?"":s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
     function verSolp(id) { solpAbierto = id; renderTraslados(); }
     function cerrarSolp() { solpAbierto = null; renderTraslados(); }
     // Texto plano de la SOLP, para copiar y pegar en WhatsApp/mail. La generación es manual
@@ -646,6 +661,7 @@
         + '</div>';
       if (!traslados.length) {
         h += '<p style="font-size:13px;color:#A8A69E">Todavía no hay traslados registrados.</p>';
+        h += renderTrasladosMOHtml();
         contenido.innerHTML = h; return;
       }
       h += '<table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr>'
@@ -675,8 +691,131 @@
           + '</tr>';
       });
       h += '</tbody></table>';
+      h += renderTrasladosMOHtml();
       contenido.innerHTML = h;
     }
+
+    // ---- Sección "Traslados de MO por proyecto" (tabla compartida con Compras) ----
+    function renderTrasladosMOHtml(){
+      const dirBadge = d => '<span style="font-size:11.5px">'+escT(TRAS_MO_DIR[d]||d)+'</span>';
+      let h = '<div style="margin-top:28px;padding-top:18px;border-top:2px solid #EEECE4">'
+        + '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">'
+        + '<div><div style="font-size:15px;font-weight:600">Traslados de MO por proyecto</div>'
+        + '<div style="font-size:12px;color:#888780">Mueven mano de obra entre Compras y La Huella. Compartido con la app de Compras · overlay (no toca la línea base).</div></div>'
+        + '<button class="btn" style="background:#185FA5;color:#fff;padding:6px 12px" onclick="trasMoAbrirNuevo()">+ Nuevo traslado</button>'
+        + '</div>';
+      if (trasMoNuevo) h += renderTrasMoForm();
+      if (!trasladosMO.length){
+        h += '<p style="font-size:13px;color:#A8A69E;margin-top:14px">Todavía no hay traslados de MO por proyecto.</p></div>';
+        return h;
+      }
+      h += '<table style="width:100%;border-collapse:collapse;font-size:12.5px;margin-top:14px"><thead><tr>'
+        + ['Fecha','Proyecto','Dirección','Rubro','Monto','Motivo','Estado','Cargó',''].map((c,i)=>'<th style="text-align:'+(i===4?'right':'left')+';padding:8px 10px;border-bottom:1px solid #EEECE4;font-size:10.5px;color:#A8A69E;text-transform:uppercase;font-weight:600">'+c+'</th>').join('')
+        + '</tr></thead><tbody>';
+      trasladosMO.forEach(t=>{
+        const est = TRAS_MO_EST[t.estado] || { label:t.estado, color:'#888780', bg:'#F1EFE8' };
+        const pb = [t.persona,t.bloque].filter(Boolean).join(' · ');
+        let acc = '';
+        if (t.estado==='propuesto') acc += '<button class="btn" style="background:#fff;border:1px solid #185FA5;color:#185FA5;padding:3px 9px;font-size:11px;margin-right:4px" onclick="trasMoAplicar(\''+t.id+'\')">Aplicar</button>';
+        if (t.estado!=='revertido') acc += '<button class="btn" style="background:#fff;border:1px solid #A32D2D;color:#A32D2D;padding:3px 9px;font-size:11px" onclick="trasMoRevertir(\''+t.id+'\')">Revertir</button>';
+        h += '<tr style="border-bottom:1px solid #F4F2EC'+(t.estado==='revertido'?';opacity:.55':'')+'">'
+          + '<td style="padding:8px 10px">'+dmy(t.creado_en)+'</td>'
+          + '<td style="padding:8px 10px">'+escT(t.proyecto_nombre||t.codigo||'—')+(t.cliente?'<div style="font-size:10.5px;color:#A8A69E">'+escT(t.cliente)+'</div>':'')+'</td>'
+          + '<td style="padding:8px 10px">'+dirBadge(t.direccion)+'</td>'
+          + '<td style="padding:8px 10px">'+escT(t.rubro||'')+'</td>'
+          + '<td style="text-align:right;padding:8px 10px;font-variant-numeric:tabular-nums;font-weight:600">'+fmtMTraslados(t.monto_ars)+'</td>'
+          + '<td style="padding:8px 10px">'+escT(t.motivo||'')+(pb?'<div style="font-size:10.5px;color:#A8A69E">'+escT(pb)+'</div>':'')+'</td>'
+          + '<td style="padding:8px 10px"><span style="background:'+est.bg+';color:'+est.color+';border-radius:8px;padding:3px 9px;font-weight:600;font-size:11px">'+escT(est.label)+'</span></td>'
+          + '<td style="padding:8px 10px;font-size:10.5px;color:#A8A69E">'+escT(t.creado_por||'')+(t.app_origen?' · '+escT(t.app_origen):'')+'</td>'
+          + '<td style="padding:8px 10px;white-space:nowrap">'+acc+'</td>'
+          + '</tr>';
+      });
+      h += '</tbody></table></div>';
+      return h;
+    }
+    function renderTrasMoForm(){
+      const proyOpts = (proyectos||[]).filter(p=>p.codigo).sort((a,b)=>String(a.nombre||'').localeCompare(String(b.nombre||''),'es'))
+        .map(p=>'<option value="'+escT(p.codigo)+'">'+escT(p.nombre||p.codigo)+'</option>').join('');
+      const persOpts = (personas||[]).map(p=>'<option value="'+escT(p.nombre)+'">').join('');
+      return '<div style="background:#fff;border:1px solid #E6E4DC;border-radius:14px;padding:16px 18px;margin-top:14px">'
+        + '<div style="font-size:14px;font-weight:600;margin-bottom:10px">Nuevo traslado de MO</div>'
+        + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+        + '<div><label style="font-size:11px;color:#888780">Proyecto (OE)</label><select id="tmo_proy" style="width:100%;padding:6px 8px;border:1px solid #E6E4DC;border-radius:8px"><option value="">— elegí —</option>'+proyOpts+'</select></div>'
+        + '<div><label style="font-size:11px;color:#888780">Dirección</label><select id="tmo_dir" style="width:100%;padding:6px 8px;border:1px solid #E6E4DC;border-radius:8px"><option value="mod_a_compras">MOD → Compras (se terceriza)</option><option value="compras_a_mod">Compras → MOD (lo hace La Huella)</option></select></div>'
+        + '<div><label style="font-size:11px;color:#888780">Rubro / sección</label><input id="tmo_rubro" placeholder="Ej: Montaje, Instalación eléctrica…" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #E6E4DC;border-radius:8px"><div style="font-size:10.5px;color:#A8A69E;margin-top:2px">Si contiene “Montaje” impacta MO Montaje; si no, MO La Huella.</div></div>'
+        + '<div><label style="font-size:11px;color:#888780">Monto ($)</label><input id="tmo_monto" type="number" min="0" step="0.01" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #E6E4DC;border-radius:8px"></div>'
+        + '<div style="grid-column:1/3"><label style="font-size:11px;color:#888780">Motivo</label><input id="tmo_motivo" placeholder="Por qué se traslada (trazabilidad)" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #E6E4DC;border-radius:8px"></div>'
+        + '<div><label style="font-size:11px;color:#888780">Persona (opcional)</label><input id="tmo_persona" list="tmo_pers_list" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #E6E4DC;border-radius:8px"><datalist id="tmo_pers_list">'+persOpts+'</datalist></div>'
+        + '<div><label style="font-size:11px;color:#888780">Bloque (opcional)</label><input id="tmo_bloque" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #E6E4DC;border-radius:8px"></div>'
+        + '</div>'
+        + '<div style="display:flex;gap:8px;margin-top:12px"><button class="btn" style="background:#185FA5;color:#fff;padding:6px 14px" onclick="trasMoGuardar()">Guardar (propuesto)</button>'
+        + '<button class="btn" style="background:#fff;border:1px solid #E6E4DC;color:#2C2C2A;padding:6px 14px" onclick="trasMoCancelar()">Cancelar</button></div>'
+        + '</div>';
+    }
+    function trasMoAbrirNuevo(){ trasMoNuevo = true; renderTraslados(); }
+    function trasMoCancelar(){ trasMoNuevo = false; renderTraslados(); }
+    async function trasMoGuardar(){
+      const codigo = (document.getElementById("tmo_proy")||{}).value || "";
+      const direccion = (document.getElementById("tmo_dir")||{}).value || "mod_a_compras";
+      const rubro = ((document.getElementById("tmo_rubro")||{}).value||"").trim();
+      const monto = Number((document.getElementById("tmo_monto")||{}).value)||0;
+      const motivo = ((document.getElementById("tmo_motivo")||{}).value||"").trim();
+      const persona = ((document.getElementById("tmo_persona")||{}).value||"").trim();
+      const bloque = ((document.getElementById("tmo_bloque")||{}).value||"").trim();
+      if (!codigo) return setEstado("Elegí el proyecto.", "err");
+      if (!(monto>0)) return setEstado("Poné un monto mayor a 0.", "err");
+      if (!motivo) return setEstado("Poné el motivo (trazabilidad).", "err");
+      const proy = (proyectos||[]).find(p=>p.codigo===codigo) || {};
+      const row = { codigo, cliente: proy.cliente||null, proyecto_nombre: proy.nombre||null,
+        direccion, rubro: rubro||null, monto_ars: monto, motivo, persona: persona||null, bloque: bloque||null,
+        estado:"propuesto", app_origen:"planificacion", creado_por: miEmail };
+      const { error } = await sb.from("compras_gp_traslados_mo").insert(row);
+      if (error) return setEstado("Error: " + error.message, "err");
+      trasMoNuevo = false;
+      const { data } = await sb.from("compras_gp_traslados_mo").select("*").order("creado_en", { ascending:false }); trasladosMO = data || [];
+      setEstado("✓ Traslado cargado (propuesto).", "ok"); renderTraslados();
+    }
+    async function trasMoAplicar(id){
+      const t = trasladosMO.find(x=>String(x.id)===String(id));
+      const { error } = await sb.from("compras_gp_traslados_mo").update({ estado:"aplicado" }).eq("id", id);
+      if (error) return setEstado("Error: " + error.message, "err");
+      const { data } = await sb.from("compras_gp_traslados_mo").select("*").order("creado_en", { ascending:false }); trasladosMO = data || [];
+      setEstado("✓ Traslado aplicado · se recalculó el MO del proyecto.", "ok"); renderTraslados();
+      if (t) trasMoNotificar(t);   // aviso a Teams de Compras (la SOLP la crea el comprador desde Compras)
+    }
+    async function trasMoRevertir(id){
+      const t = trasladosMO.find(x=>String(x.id)===String(id)); if (!t) return;
+      if (!confirm("¿Revertir este traslado de " + fmtMTraslados(t.monto_ars) + "? Deja de impactar el presupuesto vigente.")) return;
+      const ahora = new Date().toISOString();
+      const { error } = await sb.from("compras_gp_traslados_mo").update({ estado:"revertido", revertido_por: miEmail, revertido_en: ahora }).eq("id", id);
+      if (error) return setEstado("Error: " + error.message, "err");
+      const { data } = await sb.from("compras_gp_traslados_mo").select("*").order("creado_en", { ascending:false }); trasladosMO = data || [];
+      setEstado("✓ Traslado revertido.", "ok"); renderTraslados();
+    }
+    async function trasMoNotificar(t){
+      try{
+        if (!TRASLADO_WEBHOOK_COMPRAS || !t) return;
+        const facts = [
+          { title:"Proyecto:", value:(t.proyecto_nombre||t.codigo||"—") },
+          { title:"OE:", value:t.codigo||"—" },
+          { title:"Dirección:", value:(TRAS_MO_DIR[t.direccion]||t.direccion) },
+          { title:"Rubro:", value:t.rubro||"—" },
+          { title:"Monto:", value:"$ "+Number(t.monto_ars||0).toLocaleString("es-AR") }
+        ];
+        if (t.motivo) facts.push({ title:"Motivo:", value:t.motivo });
+        if (t.persona||t.bloque) facts.push({ title:"Detalle:", value:[t.persona,t.bloque].filter(Boolean).join(" · ") });
+        const titulo = t.direccion==="mod_a_compras"
+          ? "🔁 Traslado de MO → Compras (tercerizar) · cargar SOLP"
+          : "🔁 Traslado de MO: Compras → MOD (lo ejecuta La Huella)";
+        const card = { type:"message", attachments:[{ contentType:"application/vnd.microsoft.card.adaptive", content:{
+          $schema:"http://adaptivecards.io/schemas/adaptive-card.json", type:"AdaptiveCard", version:"1.4",
+          body:[ { type:"TextBlock", size:"Medium", weight:"Bolder", text:titulo, wrap:true }, { type:"FactSet", facts } ] }}] };
+        await fetch(TRASLADO_WEBHOOK_COMPRAS, { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify(card) })
+          .then(r=>{ if(!(r.ok||r.status===202)) console.warn("Aviso traslado: Teams", r.status); })
+          .catch(e=>console.warn("Aviso traslado no enviado:", e.message));
+      }catch(e){ console.warn("Aviso traslado no enviado:", e.message); }
+    }
+
     // Progresión manual de estados (sin permisos por rol todavía: cualquiera que vea la
     // pestaña puede operarla, igual que hoy con Personal y tarifas).
     const ORDEN_ESTADO_TRASLADO = ["pendiente_aviso", "avisado", "contratado"];
