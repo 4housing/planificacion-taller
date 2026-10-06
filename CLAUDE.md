@@ -21,6 +21,10 @@ mantenimiento e informes. Parte del portal unificado. Trabaja por **sede** (La H
   para ver montos de sueldos.
 - Informes son **sede-aware** (filtran por SEDE); Neuquén tiene su propio detalle
   (persona_real/ausente/horas/trailer).
+- **Costos:** fórmula única `tabCostoDeFilas()` (Tablero). La tabla "Costo por persona y
+  proyecto · día a día" (`cppCard`) la reusa: al final del Tablero en La Huella y como pestaña
+  `nqn_costos` (Tablero) en Neuquén, agrupada por trailer (el detalle de Neuquén no tiene proyecto).
+  El Tablero no está restringido por `ve_sueldos` (muestra valor-hora por jornada).
 
 ## Reglas de trabajo — NO NEGOCIABLES
 
