@@ -260,6 +260,7 @@
       cargar();
     }
     let personas = [], proyectos = [], dispo = [], plani = [], planiPers = {}, planiHoras = {}, detalle = [], feriados = [], supervisiones = [];
+    let planiCant = {}; // bloqueId -> { personaId: cantidad de personas } · solo contratistas, a efectos de control
     let presupuestoCompras = null, traslados = []; // Traslados de presupuesto a Compras + SOLP
     let lineasBase = {}; // proyecto_id -> fila de linea_base (con .contenido, .fijada_at, .fijada_por)
     // Identificador de "tarea padre" de una fila de detalle: proyecto (La Huella) o trailer (Neuquén).
@@ -537,7 +538,7 @@
         await asegurarBase();
         // planificación necesaria para validar choques con ausencias
         { const { data } = await sb.from("planificacion_bloques").select("*").order("creado_en", { ascending: true }); plani = data || []; }
-        { const { data: pp } = await leerTodas(()=>sb.from("planificacion_bloques_personal").select("*"), ["planificacion_id","persona_id"]); planiPers = {}; planiHoras = {}; (pp||[]).forEach(r => { if (!planiPers[r.planificacion_id]) { planiPers[r.planificacion_id] = []; planiHoras[r.planificacion_id] = {}; } planiPers[r.planificacion_id].push(r.persona_id); planiHoras[r.planificacion_id][r.persona_id] = (r.horas != null ? r.horas : 8); }); }
+        { const { data: pp } = await leerTodas(()=>sb.from("planificacion_bloques_personal").select("*"), ["planificacion_id","persona_id"]); planiPers = {}; planiHoras = {}; planiCant = {}; (pp||[]).forEach(r => { if (!planiPers[r.planificacion_id]) { planiPers[r.planificacion_id] = []; planiHoras[r.planificacion_id] = {}; } planiPers[r.planificacion_id].push(r.persona_id); planiHoras[r.planificacion_id][r.persona_id] = (r.horas != null ? r.horas : 8); if (r.cantidad != null) { (planiCant[r.planificacion_id] = planiCant[r.planificacion_id] || {})[r.persona_id] = r.cantidad; } }); }
         { const { data: sv } = await sb.from("planificacion_supervision").select("*"); supervisiones = sv || []; }
         const { data, error } = await leerTodas(()=>sb.from("planificacion_no_disponibilidad").select("*")); if (error) return errLoad(error);
         dispo = data || []; setEstado("\u2713 " + dispo.length + " período(s).", "ok"); renderDispo();
@@ -549,7 +550,7 @@
         const { data, error } = await sb.from("planificacion_bloques").select("*").order("creado_en", { ascending: true }); if (error) return errLoad(error);
         plani = data || [];
         const { data: pp, error: e2 } = await leerTodas(()=>sb.from("planificacion_bloques_personal").select("*"), ["planificacion_id","persona_id"]); if (e2) return errLoad(e2);
-        planiPers = {}; planiHoras = {}; (pp||[]).forEach(r => { if (!planiPers[r.planificacion_id]) { planiPers[r.planificacion_id] = []; planiHoras[r.planificacion_id] = {}; } planiPers[r.planificacion_id].push(r.persona_id); planiHoras[r.planificacion_id][r.persona_id] = (r.horas != null ? r.horas : 8); });
+        planiPers = {}; planiHoras = {}; planiCant = {}; (pp||[]).forEach(r => { if (!planiPers[r.planificacion_id]) { planiPers[r.planificacion_id] = []; planiHoras[r.planificacion_id] = {}; } planiPers[r.planificacion_id].push(r.persona_id); planiHoras[r.planificacion_id][r.persona_id] = (r.horas != null ? r.horas : 8); if (r.cantidad != null) { (planiCant[r.planificacion_id] = planiCant[r.planificacion_id] || {})[r.persona_id] = r.cantidad; } });
         { const { data: sv } = await sb.from("planificacion_supervision").select("*").order("creado_en", { ascending: true }); supervisiones = sv || []; }
         { const { data } = await leerTodas(()=>sb.from("planificacion_detalle_diario").select("*").eq("sede","la_huella")); detalle = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0); }
         await cargarLineasBase();
@@ -557,7 +558,7 @@
       } else if (tab === "detalle") {
         await asegurarBase();
         { const { data } = await sb.from("planificacion_bloques").select("*").order("creado_en", { ascending: true }); plani = data || []; }
-        { const { data: pp } = await leerTodas(()=>sb.from("planificacion_bloques_personal").select("*"), ["planificacion_id","persona_id"]); planiPers = {}; planiHoras = {}; (pp||[]).forEach(r => { if (!planiPers[r.planificacion_id]) { planiPers[r.planificacion_id] = []; planiHoras[r.planificacion_id] = {}; } planiPers[r.planificacion_id].push(r.persona_id); planiHoras[r.planificacion_id][r.persona_id] = (r.horas != null ? r.horas : 8); }); }
+        { const { data: pp } = await leerTodas(()=>sb.from("planificacion_bloques_personal").select("*"), ["planificacion_id","persona_id"]); planiPers = {}; planiHoras = {}; planiCant = {}; (pp||[]).forEach(r => { if (!planiPers[r.planificacion_id]) { planiPers[r.planificacion_id] = []; planiHoras[r.planificacion_id] = {}; } planiPers[r.planificacion_id].push(r.persona_id); planiHoras[r.planificacion_id][r.persona_id] = (r.horas != null ? r.horas : 8); if (r.cantidad != null) { (planiCant[r.planificacion_id] = planiCant[r.planificacion_id] || {})[r.persona_id] = r.cantidad; } }); }
         const { data, error } = await leerTodas(()=>sb.from("planificacion_detalle_diario").select("*").eq("sede","la_huella")); if (error) return errLoad(error);
         detalle = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0);
         await cargarLineasBase();
@@ -567,7 +568,7 @@
         await asegurarBase();
         { const { data } = await leerTodas(()=>sb.from("planificacion_no_disponibilidad").select("*")); dispo = data || []; }
         { const { data } = await sb.from("planificacion_bloques").select("*").order("creado_en", { ascending: true }); plani = data || []; }
-        { const { data: pp } = await leerTodas(()=>sb.from("planificacion_bloques_personal").select("*"), ["planificacion_id","persona_id"]); planiPers = {}; planiHoras = {}; (pp||[]).forEach(r => { if (!planiPers[r.planificacion_id]) { planiPers[r.planificacion_id] = []; planiHoras[r.planificacion_id] = {}; } planiPers[r.planificacion_id].push(r.persona_id); planiHoras[r.planificacion_id][r.persona_id] = (r.horas != null ? r.horas : 8); }); }
+        { const { data: pp } = await leerTodas(()=>sb.from("planificacion_bloques_personal").select("*"), ["planificacion_id","persona_id"]); planiPers = {}; planiHoras = {}; planiCant = {}; (pp||[]).forEach(r => { if (!planiPers[r.planificacion_id]) { planiPers[r.planificacion_id] = []; planiHoras[r.planificacion_id] = {}; } planiPers[r.planificacion_id].push(r.persona_id); planiHoras[r.planificacion_id][r.persona_id] = (r.horas != null ? r.horas : 8); if (r.cantidad != null) { (planiCant[r.planificacion_id] = planiCant[r.planificacion_id] || {})[r.persona_id] = r.cantidad; } }); }
         { const { data: sv } = await sb.from("planificacion_supervision").select("*"); supervisiones = sv || []; }
         { const { data } = await leerTodas(()=>sb.from("planificacion_detalle_diario").select("*").eq("sede","la_huella")); detalle = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0); }
         await cargarLineasBase();
@@ -2689,7 +2690,8 @@
               const esContrP = p.tipo==="Contratista";
               const chipBtn = '<button class="chip'+(on?' on':'')+'" onclick="toggleGente(\''+b.id+'\',\''+p.id+'\','+(on?'true':'false')+')" '+(esContrP?'title="Contratista (no cuenta para cobertura)"':'')+'>'+p.nombre+(esContrP?' ◇':'')+(algoNoDispo?' \u26a0':'')+'</button>';
               if(!on) return chipBtn;
-              return '<span style="display:inline-flex;align-items:center;gap:3px">'+chipBtn+'<input type="number" value="'+horas+'" min="0" max="8" onchange="editarHoras(\''+b.id+'\',\''+p.id+'\',Number(this.value))" title="Horas en esta estación" style="width:42px;padding:2px 4px;font-size:11px;text-align:center">h</span>';
+              const cantIn = esContrP ? '<input type="number" value="'+(cantContratista(b.id,p.id)||'')+'" placeholder="1" min="1" max="999" onchange="editarCant(\''+b.id+'\',\''+p.id+'\',this.value)" title="Cantidad de personas que manda el contratista (solo control: no cambia costos ni horas)" style="width:42px;padding:2px 4px;font-size:11px;text-align:center;margin-left:4px">pers.' : '';
+              return '<span style="display:inline-flex;align-items:center;gap:3px">'+chipBtn+'<input type="number" value="'+horas+'" min="0" max="8" onchange="editarHoras(\''+b.id+'\',\''+p.id+'\',Number(this.value))" title="Horas en esta estación" style="width:42px;padding:2px 4px;font-size:11px;text-align:center">h'+cantIn+'</span>';
             }).join('')+'</div>'
           + '</div>';
       }
@@ -4564,7 +4566,7 @@
       const vistosD = new Set();
       dispoRows = dispoRows.filter(d=> vistosD.has(d.persona_id)?false:(vistosD.add(d.persona_id),true));
       dispoRows.sort((a,b)=> nombrePersona(a.persona_id).localeCompare(nombrePersona(b.persona_id)));
-      const lineasTareas = rows.map(f=>{const pp=personas.find(x=>x.id===f.persona_real);const ec=pp&&pp.tipo==="Contratista";return "• "+nombrePersona(f.persona_real)+(ec?" (contratista)":"")+" → "+nombreProy(f.proyecto_id)+" · "+nombreEstacion(f.estacion_real)+modTxt(f)+": "+f.subtarea_real+(f.horas_extra>0?" (+"+f.horas_extra+"h extra)":"");});
+      const lineasTareas = rows.map(f=>{const pp=personas.find(x=>x.id===f.persona_real);const ec=pp&&pp.tipo==="Contratista";const cx=ec?cantContratistaDeFila(f):null;return "• "+nombrePersona(f.persona_real)+(ec?" (contratista"+(cx?" · "+cx+" pers.":"")+")":"")+" → "+nombreProy(f.proyecto_id)+" · "+nombreEstacion(f.estacion_real)+modTxt(f)+": "+f.subtarea_real+(f.horas_extra>0?" (+"+f.horas_extra+"h extra)":"");});
       let texto = "*Parte diario "+(fSel?dmy(fSel):"")+"*\n"+proyNom+"\n\n"+(lineasTareas.length?lineasTareas.join("\n"):"Sin asignaciones.");
       if(dispoRows.length) texto += "\n\n*No disponibles:*\n"+dispoRows.map(d=> "• "+nombrePersona(d.persona_id)+" — "+d.tipo).join("\n");
       let h='<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">';
@@ -4577,7 +4579,7 @@
       h+='</div>';
       h+='<div id="parteBox" style="border:1px solid #E6E4DC;border-radius:12px;padding:18px 20px;max-width:480px"><div style="font-size:16px;font-weight:600">Parte diario '+(fSel?dmy(fSel):"")+'</div><div style="font-size:12.5px;color:#888780;margin-bottom:6px">'+proyNom+(parteEst?' · '+STATIONS[parteEst].label:'')+(partePersona?' · '+nombrePersona(partePersona):'')+'</div><div style="border-top:1px solid #F1EFE8;margin-top:6px;padding-top:6px">';
       if(!rows.length && !dispoRows.length) h+='<div style="font-size:13px;color:#A8A69E;padding:8px 0">'+(detalle.length?'Sin asignaciones para este filtro.':'Generá el detalle diario primero.')+'</div>';
-      rows.forEach(f=>{ const mm=(f.modulos_real||"").trim(); const pp=personas.find(x=>x.id===f.persona_real); const esContr=pp&&pp.tipo==="Contratista"; h+='<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid #F1EFE8;font-size:13px"><span style="font-weight:600;min-width:140px">'+nombrePersona(f.persona_real)+(esContr?' <span style="background:#EFE7FB;color:#6B3FA0;padding:1px 5px;border-radius:5px;font-size:9.5px;font-weight:500">contratista</span>':'')+'</span><span><span style="background:#EDE9F6;color:#3C3489;padding:2px 6px;border-radius:6px;font-size:10.5px;font-weight:600">'+nombreProy(f.proyecto_id)+'</span> <span style="background:'+estBg(f.estacion_real)+';color:'+estColor(f.estacion_real)+';padding:2px 6px;border-radius:6px;font-size:10.5px">'+nombreEstacion(f.estacion_real)+'</span>'+(mm?' <span style="background:#E6F1FB;color:#185FA5;padding:2px 6px;border-radius:6px;font-size:10.5px">'+mm+'</span>':'')+' <span style="color:#888780">'+f.subtarea_real+'</span>'+(f.horas_extra>0?' <span style="color:#BA7517;font-size:11px">+'+f.horas_extra+'h</span>':'')+'</span></div>'; });
+      rows.forEach(f=>{ const mm=(f.modulos_real||"").trim(); const pp=personas.find(x=>x.id===f.persona_real); const esContr=pp&&pp.tipo==="Contratista"; const cxH=esContr?cantContratistaDeFila(f):null; h+='<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid #F1EFE8;font-size:13px"><span style="font-weight:600;min-width:140px">'+nombrePersona(f.persona_real)+(esContr?' <span style="background:#EFE7FB;color:#6B3FA0;padding:1px 5px;border-radius:5px;font-size:9.5px;font-weight:500">contratista'+(cxH?' · '+cxH+' pers.':'')+'</span>':'')+'</span><span><span style="background:#EDE9F6;color:#3C3489;padding:2px 6px;border-radius:6px;font-size:10.5px;font-weight:600">'+nombreProy(f.proyecto_id)+'</span> <span style="background:'+estBg(f.estacion_real)+';color:'+estColor(f.estacion_real)+';padding:2px 6px;border-radius:6px;font-size:10.5px">'+nombreEstacion(f.estacion_real)+'</span>'+(mm?' <span style="background:#E6F1FB;color:#185FA5;padding:2px 6px;border-radius:6px;font-size:10.5px">'+mm+'</span>':'')+' <span style="color:#888780">'+f.subtarea_real+'</span>'+(f.horas_extra>0?' <span style="color:#BA7517;font-size:11px">+'+f.horas_extra+'h</span>':'')+'</span></div>'; });
       if(dispoRows.length){
         h+='<div style="border-top:1px dashed #E6D9C2;margin-top:10px;padding-top:8px"><div style="font-size:10.5px;font-weight:700;color:#BA7517;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">No disponibles</div>';
         dispoRows.forEach(d=>{ h+='<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid #F1EFE8;font-size:13px"><span style="font-weight:600;min-width:140px">'+nombrePersona(d.persona_id)+'</span><span><span style="background:#FAEEDA;color:#BA7517;padding:2px 6px;border-radius:6px;font-size:10.5px;font-weight:600">'+d.tipo+'</span></span></div>'; });
@@ -5674,6 +5676,29 @@
         tot += (planiHoras[b.id] && planiHoras[b.id][personaId] != null) ? planiHoras[b.id][personaId] : 8;
       });
       return tot;
+    }
+    // ---- Cantidad de personas de un contratista (solo control) ----
+    // Se guarda en planificacion_bloques_personal.cantidad (SQL 004). Vacío = 1.
+    function cantContratista(planiId, personaId){ const c = planiCant[planiId] && planiCant[planiId][personaId]; return (c != null && c > 0) ? c : null; }
+    async function editarCant(planiId, personaId, valor) {
+      const n = parseInt(valor, 10);
+      const cantidad = (isNaN(n) || n < 1) ? null : Math.min(n, 999);
+      const { error } = await sb.from("planificacion_bloques_personal").update({ cantidad }).eq("planificacion_id", planiId).eq("persona_id", personaId);
+      if (error) {
+        if (/cantidad/i.test(error.message||"")) return setEstado("Falta correr en Supabase el SQL 004_contratista_cantidad_personas.sql para guardar la cantidad de personas.", "err");
+        return setEstado("Error: " + error.message, "err");
+      }
+      if (!planiCant[planiId]) planiCant[planiId] = {};
+      if (cantidad == null) delete planiCant[planiId][personaId]; else planiCant[planiId][personaId] = cantidad;
+      setEstado("\u2713 Guardado.", "ok");
+    }
+    // Para el parte diario: la fila del detalle no apunta al bloque, así que se busca el bloque
+    // del plan que la originó (mismo proyecto, estación planificada, persona y día dentro del rango).
+    function cantContratistaDeFila(f){
+      const b = plani.find(x => x.proyecto_id === f.proyecto_id && x.estacion === f.estacion_plan
+        && (planiPers[x.id]||[]).includes(f.persona_plan)
+        && x.fecha_desde && x.fecha_hasta && f.fecha >= x.fecha_desde && f.fecha <= x.fecha_hasta);
+      return b ? cantContratista(b.id, f.persona_plan) : null;
     }
     async function editarHoras(planiId, personaId, horas) {
       // guardar siempre; avisar (sin bloquear) si algún día supera 8h entre estaciones
