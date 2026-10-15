@@ -382,6 +382,11 @@
       if (!proyectos.length) { const { data } = await sb.from("planificacion_proyectos").select("*"); proyectos = data || []; }
       { const { data } = await leerTodas(()=>sb.from("planificacion_no_disponibilidad").select("*")); dispo = data || []; }
       { const { data } = await sb.from("planificacion_feriados").select("*"); feriados = data || []; }
+      { // sábados habilitados por proyecto → mapa proyecto_id -> Set(fecha)
+        proyectoSabados = {};
+        try { const { data } = await sb.from("planificacion_proyecto_sabados").select("proyecto_id,fecha");
+          (data||[]).forEach(r=>{ (proyectoSabados[r.proyecto_id] = proyectoSabados[r.proyecto_id] || new Set()).add(r.fecha); });
+        } catch(e){ /* tabla puede no existir aún */ } }
       await cargarHistoriales();
     }
     // Carga el histórico mensual de valor-hora y especialidad a mapas en memoria.
@@ -533,7 +538,9 @@
         setEstado("\u2713 " + traslados.length + " traslado(s) \u00b7 " + trasladosMO.length + " de MO por proyecto.", "ok"); renderTraslados();
       } else if (tab === "proyectos") {
         const { data, error } = await sb.from("planificacion_proyectos").select("*"); if (error) return errLoad(error);
-        proyectos = data || []; setEstado("\u2713 " + proyectos.length + " proyecto(s).", "ok"); renderProyectos();
+        proyectos = data || [];
+        { proyectoSabados = {}; try { const { data: sb2 } = await sb.from("planificacion_proyecto_sabados").select("proyecto_id,fecha"); (sb2||[]).forEach(r=>{ (proyectoSabados[r.proyecto_id]=proyectoSabados[r.proyecto_id]||new Set()).add(r.fecha); }); } catch(e){} }
+        setEstado("\u2713 " + proyectos.length + " proyecto(s).", "ok"); renderProyectos();
       } else if (tab === "dispo") {
         await asegurarBase();
         // planificación necesaria para validar choques con ausencias
@@ -1077,6 +1084,7 @@
         + ln(pr.id,'presupuesto_mo_huella','Presupuesto MO La Huella',prVal(pr,'presupuesto_mo_huella'))
         + ln(pr.id,'presupuesto_mo_montaje','Presupuesto MO Montaje',prVal(pr,'presupuesto_mo_montaje'))
         + li(pr.id,'planos','Planos (link o ref.)',prVal(pr,'planos'))
+        + bloqueSabados(pr)
         + editorModulos(pr) + '</div></div>';
       });
       if(proyVista!=='archivados') h += '<button class="btn-add" onclick="agregarPr()">+ Agregar proyecto</button>';
@@ -1089,6 +1097,39 @@
         + '<button id="pr-savebtn" class="btn btn-primary" style="background:'+(sucio?'#185FA5':'#A8A69E')+';cursor:'+(sucio?'pointer':'not-allowed')+'" onclick="guardarCambiosPr()">Guardar cambios</button>'
         + '</div>';
       contenido.innerHTML = h;
+    }
+    // Bloque "Sábados habilitados" por proyecto (día hábil real, con recargo en el costo).
+    function bloqueSabados(pr){
+      const sabTodos = !!pr.sabados_todos;
+      const sabList = [...(proyectoSabados[pr.id] || new Set())].sort();
+      const modo = sabTodos ? 'todos' : (sabList.length ? 'algunos' : 'ninguno');
+      const rb = (val,lbl)=> '<label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer"><input type="radio" name="sab-'+pr.id+'" '+(modo===val?'checked':'')+' onchange="setSabadosModo(\''+pr.id+'\',\''+val+'\')" style="width:auto;margin:0"> '+lbl+'</label>';
+      let h = '<div class="lbl" style="grid-column:1/-1;background:#FBFAF5;border:1px solid #EFE7D6;border-radius:10px;padding:10px 12px">';
+      h += '<div style="font-size:12px;font-weight:600;color:#8A6D1F;margin-bottom:7px">Sábados habilitados <span style="font-weight:400;color:#A8A69E">· día hábil real del proyecto, con recargo en el costo</span></div>';
+      h += '<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:#5F5E5A">'+rb('ninguno','Ninguno')+rb('todos','Todos (mientras dure el proyecto)')+rb('algunos','Elegir fechas')+'</div>';
+      if(modo==='algunos'){
+        h += '<div style="margin-top:9px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
+        h += '<input type="date" id="sabadd-'+pr.id+'" style="width:auto"><button class="btn" style="padding:4px 10px;font-size:11.5px;background:#fff;border:1px solid #E6E4DC;color:#2C2C2A" onclick="agregarSabado(\''+pr.id+'\')">+ Agregar sábado</button>';
+        h += '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'+(sabList.length ? sabList.map(fx=>'<span style="background:#fff;border:1px solid #E6E4DC;border-radius:7px;padding:2px 4px 2px 8px;font-size:11.5px">'+dmy(fx)+' <button class="btn-del" style="padding:0 3px" onclick="quitarSabado(\''+pr.id+'\',\''+fx+'\')">×</button></span>').join('') : '<span style="color:#A8A69E;font-size:11.5px">Sin sábados elegidos.</span>')+'</div>';
+        h += '</div>';
+      }
+      h += '</div>';
+      return h;
+    }
+    async function setSabadosModo(id, modo){
+      if(modo==='todos'){ const {error}=await sb.from("planificacion_proyectos").update({sabados_todos:true}).eq("id",id); if(error)return setEstado("Error: "+error.message,"err"); }
+      else { const {error}=await sb.from("planificacion_proyectos").update({sabados_todos:false}).eq("id",id); if(error)return setEstado("Error: "+error.message,"err"); if(modo==='ninguno'){ const {error:e2}=await sb.from("planificacion_proyecto_sabados").delete().eq("proyecto_id",id); if(e2)return setEstado("Error: "+e2.message,"err"); } }
+      setEstado("✓ Sábados actualizados.","ok"); cargar();
+    }
+    async function agregarSabado(id){
+      const inp=document.getElementById("sabadd-"+id); const f=inp&&inp.value; if(!f) return setEstado("Elegí una fecha.","err");
+      if(new Date(f+"T12:00:00").getDay()!==6) return setEstado("Esa fecha no es un sábado.","err");
+      const {error}=await sb.from("planificacion_proyecto_sabados").insert({proyecto_id:id,fecha:f}); if(error)return setEstado("Error: "+error.message,"err");
+      setEstado("✓ Sábado habilitado.","ok"); cargar();
+    }
+    async function quitarSabado(id,f){
+      const {error}=await sb.from("planificacion_proyecto_sabados").delete().eq("proyecto_id",id).eq("fecha",f); if(error)return setEstado("Error: "+error.message,"err");
+      setEstado("✓ Sábado quitado.","ok"); cargar();
     }
     function li(id,c,l,v){return '<label class="lbl">'+l+'<input value="'+(v==null?'':String(v).replace(/"/g,'&quot;'))+'" onchange="setDraftPr(\''+id+'\',\''+c+'\',this.value)"></label>';}
     function ln(id,c,l,v){return '<label class="lbl">'+l+'<input type="number" value="'+(v||0)+'" onchange="setDraftPr(\''+id+'\',\''+c+'\',Number(this.value))"></label>';}
@@ -2164,7 +2205,7 @@
         // Cotizaciones y archivados no consumen disponibilidad: se ignoran para conflictos.
         if(!esOperativo(proyectos.find(p=>p.id===b.proyecto_id))) return;
         if(!(planiPers[b.id]||[]).includes(personaId)) return;
-        const dias=diasHabiles(b.fecha_desde,b.fecha_hasta);
+        const dias=diasHabiles(b.fecha_desde,b.fecha_hasta,b.proyecto_id);
         const choca=dias.filter(d=> d>=desde && d<=hasta);
         if(choca.length){ const st=STATIONS[b.estacion]; hit.push({ estacion: st?st.label:b.estacion, proyecto: nombreProy(b.proyecto_id), dias: choca }); }
       });
@@ -2249,7 +2290,19 @@
     function esFeriado(f){ return feriados.some(h => h.fecha === f && !h.se_trabaja); }
     // Multiplicador de hora extra: 1.5x de lunes a sábado, 2x domingos y feriados.
     function multExtra(fecha){ if(!fecha) return 1.5; const w = new Date(fecha+"T12:00:00").getDay(); if(w===0 || esFeriado(fecha)) return 2; return 1.5; }
-    function diasHabiles(a,b){const o=[];if(!a||!b)return o;let d=new Date(a+"T12:00:00");const e=new Date(b+"T12:00:00");while(d<=e){const w=d.getDay();const f=fechaStr(d);if(w!==0&&w!==6&&!esFeriado(f))o.push(f);d=new Date(d.getTime()+86400000);}return o;}
+    // Sábados habilitados por proyecto (La Huella): mapa proyecto_id -> Set(fecha) + flag proyectos.sabados_todos.
+    let proyectoSabados = {};
+    function esSabadoHabil(proyId, fecha){
+      if(!proyId) return false;
+      const p = proyectos.find(x=>x.id===proyId);
+      if(p && p.sabados_todos) return true;
+      const s = proyectoSabados[proyId];
+      return !!(s && s.has(fecha));
+    }
+    // diasHabiles: excluye domingos/sábados/feriados; si se pasa proyId, INCLUYE los
+    // sábados habilitados para ese proyecto (día hábil real, con costo de recargo aparte).
+    // Sin proyId → comportamiento histórico idéntico.
+    function diasHabiles(a,b,proyId){const o=[];if(!a||!b)return o;let d=new Date(a+"T12:00:00");const e=new Date(b+"T12:00:00");while(d<=e){const w=d.getDay();const f=fechaStr(d);const sabOK=(w===6&&esSabadoHabil(proyId,f));if((w!==0&&w!==6&&!esFeriado(f))||sabOK)o.push(f);d=new Date(d.getTime()+86400000);}return o;}
     // ---- DESPLAZAMIENTO POR REPLANIFICACIÓN ----
     // Diferencia en días corridos entre dos fechas ISO (b - a). Positivo = b es posterior.
     function diffDiasCorridos(a,b){ if(!a||!b) return 0; const da=new Date(a+"T12:00:00"), db=new Date(b+"T12:00:00"); return Math.round((db-da)/86400000); }
@@ -2288,7 +2341,7 @@
     function metricasBloques(bloques){
       const dias = new Set(); let fin = null;
       (bloques||[]).forEach(b=>{
-        const dP = diasHabiles(b.fecha_desde, b.fecha_hasta);
+        const dP = diasHabiles(b.fecha_desde, b.fecha_hasta, b.proyecto_id);
         dP.forEach(d=>dias.add(d));
         if(dP.length){ const f=dP[dP.length-1]; if(!fin || f>fin) fin=f; }
       });
@@ -2358,7 +2411,7 @@
     function validarCobertura() {
       // rango total de fechas planificadas
       const todas = [];
-      plani.forEach(b => diasHabiles(b.fecha_desde, b.fecha_hasta).forEach(d => todas.push(d)));
+      plani.forEach(b => diasHabiles(b.fecha_desde, b.fecha_hasta, b.proyecto_id).forEach(d => todas.push(d)));
       const fechas = [...new Set(todas)].sort();
       // carga por persona/día, separando dos "pistas" paralelas:
       //  - cargaEst: trabajo en estaciones normales (se suma)
@@ -2367,7 +2420,7 @@
       plani.forEach(b => {
         (planiPers[b.id]||[]).forEach(g => {
           const hrs = (planiHoras[b.id] && planiHoras[b.id][g]!=null) ? planiHoras[b.id][g] : 8;
-          diasHabiles(b.fecha_desde, b.fecha_hasta).forEach(d => {
+          diasHabiles(b.fecha_desde, b.fecha_hasta, b.proyecto_id).forEach(d => {
             const k = g+"|"+d;
             cargaEst[k] = (cargaEst[k]||0) + hrs;
           });
@@ -2386,7 +2439,7 @@
       const directos = personas.filter(p => p.tipo !== "Contratista");
       const faltantes = [], excesos = [];
       const faltantesObj = [], excesosObj = [];
-      const bloquesDe = (pid, d) => plani.filter(b => (planiPers[b.id]||[]).includes(pid) && diasHabiles(b.fecha_desde,b.fecha_hasta).includes(d)).map(b=>b.id);
+      const bloquesDe = (pid, d) => plani.filter(b => (planiPers[b.id]||[]).includes(pid) && diasHabiles(b.fecha_desde,b.fecha_hasta,b.proyecto_id).includes(d)).map(b=>b.id);
       fechas.forEach(d => {
         directos.forEach(p => {
           if (noDispoEn(p.id, d)) return;
@@ -2414,7 +2467,7 @@
       planiProy = "";
       // Expandir los bloques del conflicto para que sean visibles (filas colapsables).
       if(bloques.length){ bloques.forEach(id=>planiAbiertos.add(id)); }
-      else { plani.filter(b=>diasHabiles(b.fecha_desde,b.fecha_hasta).includes(fechaISO)).forEach(b=>planiAbiertos.add(b.id)); }
+      else { plani.filter(b=>diasHabiles(b.fecha_desde,b.fecha_hasta,b.proyecto_id).includes(fechaISO)).forEach(b=>planiAbiertos.add(b.id)); }
       cambiarTab("plani");
     }
     // Aplica el resaltado visual tras renderizar Planificación General (scroll + highlight temporal).
@@ -2423,7 +2476,7 @@
       const r = planiResaltar; planiResaltar = null;
       setTimeout(()=>{
         let ids = r.bloques && r.bloques.length ? r.bloques.slice() : [];
-        if(!ids.length){ ids = plani.filter(b=>diasHabiles(b.fecha_desde,b.fecha_hasta).includes(r.fecha)).map(b=>b.id); }
+        if(!ids.length){ ids = plani.filter(b=>diasHabiles(b.fecha_desde,b.fecha_hasta,b.proyecto_id).includes(r.fecha)).map(b=>b.id); }
         let primero = null;
         ids.forEach(bid=>{
           const el = document.getElementById("plibloque-"+bid);
@@ -2679,10 +2732,10 @@
           + '<div class="pl-row" style="margin-bottom:8px"><span style="font-size:11px;color:#A8A69E;margin-right:4px">Proyecto:</span><select onchange="editarPl(\''+b.id+'\',\'proyecto_id\',this.value)" style="min-width:160px"><option value="" '+(!b.proyecto_id?'selected':'')+'>(sin proyecto — asignar)</option>'+proyectos.map(p=>'<option value="'+p.id+'" '+(p.id===b.proyecto_id?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></div>'
           + '<div style="margin:2px 0 8px"><div style="font-size:11px;color:#A8A69E;margin-bottom:4px">Tareas (tildá una o varias):</div><div class="chips">'+st.subs.map(s=>{const on=subsSel.includes(s);return '<button class="chip'+(on?' on':'')+'" onclick="toggleSub(\''+b.id+'\',\''+s.replace(/'/g,"\\\\'")+'\','+(on?'true':'false')+')">'+s+'</button>';}).join('')+'</div></div>'
           + (function(){ const mods=modulosDeProy(b.proyecto_id); const sel=(b.modulos||"").split(",").map(s=>s.trim()).filter(Boolean); let m='<div style="margin:2px 0 8px"><div style="font-size:11px;color:#A8A69E;margin-bottom:4px">Módulos (opcional, tildá uno o varios):</div><div class="chips">'; if(!mods.length){ m+='<span style="font-size:11px;color:#A8A69E">El proyecto no tiene módulos definidos (cargalos en Proyectos).</span>'; } else { m+=mods.map(md=>{const on=sel.includes(md);return '<button class="chip'+(on?' on':'')+'" onclick="toggleModuloPl(\''+b.id+'\',\''+md.replace(/'/g,"\\\\'")+'\','+(on?'true':'false')+')">'+md+'</button>';}).join(''); } return m+'</div></div>'; })()
-          + '<div class="pl-row"><input type="date" value="'+(b.fecha_desde||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_desde\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">a</span><input type="date" value="'+(b.fecha_hasta||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_hasta\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">'+diasHabiles(b.fecha_desde,b.fecha_hasta).length+' días háb.</span></div>'
+          + '<div class="pl-row"><input type="date" value="'+(b.fecha_desde||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_desde\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">a</span><input type="date" value="'+(b.fecha_hasta||'')+'" onchange="editarPl(\''+b.id+'\',\'fecha_hasta\',this.value)" style="width:auto"><span style="color:#A8A69E;font-size:12px">'+diasHabiles(b.fecha_desde,b.fecha_hasta,b.proyecto_id).length+' días háb.</span></div>'
           + '<div class="chips">'+personasHuella().map(p=>{
               const on=gente.includes(p.id);
-              const dias=diasHabiles(b.fecha_desde,b.fecha_hasta);
+              const dias=diasHabiles(b.fecha_desde,b.fecha_hasta,b.proyecto_id);
               const diasNoDispo=dias.filter(d=>noDispoEn(p.id,d));
               const algoNoDispo=diasNoDispo.length>0;
               if(algoNoDispo && !on){ const tipo=tipoNoDispoEn(p.id,diasNoDispo[0])||"No disp."; return '<button class="chip" disabled title="No disponible ('+tipo+') en '+diasNoDispo.length+' día(s) del rango" style="text-decoration:line-through;opacity:0.45;cursor:not-allowed">'+p.nombre+'</button>'; }
@@ -2698,7 +2751,7 @@
       // ¿el bloque tiene algún día con una persona sobre 8h? (para marca visual de conflicto)
       function bloqueEnConflicto(b){
         const gente = planiPers[b.id] || [];
-        const dias = diasHabiles(b.fecha_desde, b.fecha_hasta);
+        const dias = diasHabiles(b.fecha_desde, b.fecha_hasta, b.proyecto_id);
         for(const pid of gente){
           const p = personas.find(x=>x.id===pid);
           if(p && p.tipo==="Contratista") continue; // contratistas no cuentan
@@ -2714,7 +2767,7 @@
         const pr = proyectos.find(p=>p.id===b.proyecto_id);
         const abierto = planiAbiertos.has(b.id);
         const conf = bloqueEnConflicto(b);
-        const dias = diasHabiles(b.fecha_desde,b.fecha_hasta);
+        const dias = diasHabiles(b.fecha_desde,b.fecha_hasta,b.proyecto_id);
         const fechaTxt = (b.fecha_desde&&b.fecha_hasta) ? dm(b.fecha_desde)+'–'+dm(b.fecha_hasta)+' · '+dias.length+' d.háb.' : '<span style="color:#C99">sin fechas</span>';
         const tareaTxt = subsSel.length ? subsSel.join(', ') : '<span style="color:#A8A69E">sin tarea</span>';
         // avatares (iniciales) de la gente asignada
@@ -2759,7 +2812,7 @@
         const dias=[]; let cur=new Date(dIni);
         while(cur<=dFin && dias.length<42){ dias.push(fechaStr(cur)); cur.setDate(cur.getDate()+1); }
         // función: bloques que caen en un día (usando días hábiles del bloque)
-        const bloquesEnDia = (fecha, filtroFn) => planiVisibles.filter(b => filtroFn(b) && diasHabiles(b.fecha_desde,b.fecha_hasta).includes(fecha));
+        const bloquesEnDia = (fecha, filtroFn) => planiVisibles.filter(b => filtroFn(b) && diasHabiles(b.fecha_desde,b.fecha_hasta,b.proyecto_id).includes(fecha));
 
         // definir las filas según el eje
         let filas; // [{label, color, filtroFn}]
@@ -3086,7 +3139,7 @@
       // generar filas nuevas de hoy en adelante
       const filas = [];
       plani.forEach(b => {
-        const dias = diasHabiles(b.fecha_desde, b.fecha_hasta).filter(d => d >= hoy);
+        const dias = diasHabiles(b.fecha_desde, b.fecha_hasta, b.proyecto_id).filter(d => d >= hoy);
         const gente = planiPers[b.id] || [];
         gente.forEach(g => dias.forEach(fecha => {
           if (noDispoEn(g, fecha)) return; // no genera filas para días no disponibles
@@ -3140,7 +3193,7 @@
       const yaHay = new Set((exist||[]).map(r => r.persona_real + "|" + r.estacion_real + "|" + r.proyecto_id));
       const filas = [];
       plani.forEach(b => {
-        const dias = diasHabiles(b.fecha_desde, b.fecha_hasta);
+        const dias = diasHabiles(b.fecha_desde, b.fecha_hasta, b.proyecto_id);
         if (!dias.includes(fecha)) return;
         const gente = planiPers[b.id] || [];
         gente.forEach(g => {
@@ -3304,7 +3357,7 @@
       plani.forEach(b=>{
         if(!esProyOper(b.proyecto_id)) return;
         const key = b.estacion + "|" + b.proyecto_id;
-        const diasPlan = diasHabiles(b.fecha_desde, b.fecha_hasta).filter(esFechaReal);
+        const diasPlan = diasHabiles(b.fecha_desde, b.fecha_hasta, b.proyecto_id).filter(esFechaReal);
         const pe = ensureEst(key);
         diasPlan.forEach(d=> pe.diasPlanSet.add(d));
         if (diasPlan.length){ const fin = diasPlan[diasPlan.length-1]; if(!pe.finPlan || fin>pe.finPlan) pe.finPlan = fin; }
@@ -3369,7 +3422,7 @@
       proyectos.forEach(p=>{ const pp = porProyecto[p.id]; if(pp){ pp.presup = presupMO(p); pp.presupHuella = presupHuella(p); pp.presupMontaje = presupMontaje(p); } });
       // fin planificado por proyecto (desde plani), recortado a lo que ya debería haber ocurrido
       plani.forEach(b=>{
-        const dP = diasHabiles(b.fecha_desde, b.fecha_hasta).filter(esFechaReal);
+        const dP = diasHabiles(b.fecha_desde, b.fecha_hasta, b.proyecto_id).filter(esFechaReal);
         if(!dP.length) return;
         const pp = ensureProy(b.proyecto_id);
         const fin = dP[dP.length-1];
@@ -3632,7 +3685,7 @@
       const conf = Object.entries(horasDia).filter(([,v])=>v>8);
       if (conf.length) h += '<div class="estado err"><b>⚠ Sobreasignación</b> (tocá para resolver en Planificación General): '+conf.map(([k,v])=>{
           const [pid,f]=k.split("|");
-          const bloques = plani.filter(b=>(planiPers[b.id]||[]).includes(pid) && diasHabiles(b.fecha_desde,b.fecha_hasta).includes(f)).map(b=>b.id).join(",");
+          const bloques = plani.filter(b=>(planiPers[b.id]||[]).includes(pid) && diasHabiles(b.fecha_desde,b.fecha_hasta,b.proyecto_id).includes(f)).map(b=>b.id).join(",");
           const txt = nombrePersona(pid)+" ("+dm(f)+"): "+v+"h";
           return '<a href="javascript:void(0)" onclick="saltarAConflicto(\''+pid+'\',\''+f+'\',\''+bloques+'\')" style="color:#A32D2D;text-decoration:underline;text-decoration-style:dotted;cursor:pointer" title="Ir a Planificación General y resaltar este conflicto">'+txt+'</a>';
         }).join(" · ")+'</div>';
@@ -4218,13 +4271,13 @@
       // SPI por días: días hábiles planificados que ya debían estar hechos (hasta ayer) vs días reales trabajados.
       const bloqDash = plani.filter(b=> !dashProy || b.proyecto_id===dashProy);
       let diasPlanHastaHoy=new Set(), diasRealSet=new Set();
-      bloqDash.forEach(b=> diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>{ if(esFechaReal(d)) diasPlanHastaHoy.add(b.estacion+"|"+b.proyecto_id+"|"+d); }));
+      bloqDash.forEach(b=> diasHabiles(b.fecha_desde,b.fecha_hasta,b.proyecto_id).forEach(d=>{ if(esFechaReal(d)) diasPlanHastaHoy.add(b.estacion+"|"+b.proyecto_id+"|"+d); }));
       det.forEach(f=>{ if(!f.ausente && f.estacion_real!==SUP_MARK && esFechaReal(f.fecha)) diasRealSet.add(f.estacion_real+"|"+f.proyecto_id+"|"+f.fecha); });
       const spi = diasPlanHastaHoy.size>0 ? (diasRealSet.size/diasPlanHastaHoy.size) : null;
       // --- Completitud del detalle: de los DÍAS HÁBILES planificados hasta ayer, cuántos tienen
       // al menos una fila cargada (trabajada o ausente). Mide cuán confiables son CPI/SPI/PPC.
       let diasEsperados=new Set(), diasConRegistro=new Set();
-      bloqDash.forEach(b=> diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>{ if(esFechaReal(d)) diasEsperados.add(b.proyecto_id+"|"+d); }));
+      bloqDash.forEach(b=> diasHabiles(b.fecha_desde,b.fecha_hasta,b.proyecto_id).forEach(d=>{ if(esFechaReal(d)) diasEsperados.add(b.proyecto_id+"|"+d); }));
       det.forEach(f=>{ if(esFechaReal(f.fecha)) diasConRegistro.add(f.proyecto_id+"|"+f.fecha); });
       const espN = diasEsperados.size;
       const cargadosN = [...diasEsperados].filter(k=>diasConRegistro.has(k)).length;
@@ -4254,7 +4307,7 @@
       // Cobertura próximos 5 días hábiles: días-estación planificados vs cubiertos en el detalle (coord)
       const prox5=[]; { let d=hoyISO(); let guard=0; while(prox5.length<5 && guard<30){ const dd=new Date(d+"T12:00:00"); const w=dd.getDay(); if(w!==0&&w!==6&&!esFeriado(d)) prox5.push(d); d=sumarDiasHabiles(d,1); guard++; } }
       let cobPlan=new Set(), cobCubierto=new Set();
-      bloqDash.forEach(b=> diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(dia=>{ if(prox5.includes(dia)) cobPlan.add(b.estacion+"|"+b.proyecto_id+"|"+dia); }));
+      bloqDash.forEach(b=> diasHabiles(b.fecha_desde,b.fecha_hasta,b.proyecto_id).forEach(dia=>{ if(prox5.includes(dia)) cobPlan.add(b.estacion+"|"+b.proyecto_id+"|"+dia); }));
       det.forEach(f=>{ if(!f.ausente && prox5.includes(f.fecha)) cobCubierto.add(f.estacion_real+"|"+f.proyecto_id+"|"+f.fecha); });
       const sinCubrir = [...cobPlan].filter(k=>!cobCubierto.has(k)).length;
       // costo por estación
@@ -4345,7 +4398,7 @@
         h+='<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px">'+ag("📋 Tareas de hoy",diaHoy,tareasDe(diaHoy))+ag("⏭️ Preparar para mañana",diaMan,tareasDe(diaMan))+'</div>';
         // Top estaciones que aportan al atraso (días reales vs planificados a hoy, por estación)
         const atr={};
-        bloqDash.forEach(b=>{ if(b.estacion===SUP_MARK)return; diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>{ if(esFechaReal(d)){ (atr[b.estacion]=atr[b.estacion]||{plan:new Set(),real:new Set()}).plan.add(b.proyecto_id+"|"+d); } }); });
+        bloqDash.forEach(b=>{ if(b.estacion===SUP_MARK)return; diasHabiles(b.fecha_desde,b.fecha_hasta,b.proyecto_id).forEach(d=>{ if(esFechaReal(d)){ (atr[b.estacion]=atr[b.estacion]||{plan:new Set(),real:new Set()}).plan.add(b.proyecto_id+"|"+d); } }); });
         det.forEach(f=>{ if(f.ausente||f.estacion_real===SUP_MARK)return; if(!esFechaReal(f.fecha))return; (atr[f.estacion_real]=atr[f.estacion_real]||{plan:new Set(),real:new Set()}).real.add(f.proyecto_id+"|"+f.fecha); });
         const atrArr=Object.entries(atr).map(([k,v])=>[k, v.plan.size - v.real.size]).filter(([,d])=>d>0).sort((a,b)=>b[1]-a[1]).slice(0,5);
         if(atrArr.length){
@@ -4395,7 +4448,7 @@
         if(b.estacion===SUP_MARK || !STATIONS[b.estacion]) return;
         if(!pasaProyG(b.proyecto_id)) return;
         const e=ensure(b.estacion);
-        diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>{ (e.planByDay[d]=e.planByDay[d]||new Set()).add(b.proyecto_id); });
+        diasHabiles(b.fecha_desde,b.fecha_hasta,b.proyecto_id).forEach(d=>{ (e.planByDay[d]=e.planByDay[d]||new Set()).add(b.proyecto_id); });
       });
       detalle.forEach(f=>{
         if(f.ausente) return; if(f.estacion_real===SUP_MARK || !STATIONS[f.estacion_real]) return;
@@ -4742,7 +4795,7 @@
       let planDias=[], realDias=[];
       // El plan del informe muestra el plan COMPLETO de la base (no recortado a "hasta ayer"):
       // es contra lo que el proyecto se comprometió. El recorte aplica solo al "real".
-      bloquesPlanBase.forEach(b=>diasHabiles(b.fecha_desde,b.fecha_hasta).forEach(d=>planDias.push(d)));
+      bloquesPlanBase.forEach(b=>diasHabiles(b.fecha_desde,b.fecha_hasta,b.proyecto_id).forEach(d=>planDias.push(d)));
       if(midiendoReal){ det.forEach(f=>{ if(!f.ausente && esRealInf(f.fecha)) realDias.push(f.fecha); }); }
       planDias=[...new Set(planDias)].sort(); realDias=[...new Set(realDias)].sort();
       const planIni=planDias[0], planFin=planDias[planDias.length-1];
@@ -4799,7 +4852,7 @@
 
       // --- POR ESTACIÓN (Supervisión EXCLUIDA: es un rol paralelo, no una estación) ---
       const est={};
-      blo.forEach(b=>{ if(b.estacion===SUP_MARK) return; const dP=diasHabiles(b.fecha_desde,b.fecha_hasta).filter(esRealInf); if(!est[b.estacion])est[b.estacion]={planD:new Set(),realD:new Set(),costo:0,hsExtra:0,modsPlan:new Set(),modsReal:new Set()}; dP.forEach(d=>est[b.estacion].planD.add(d)); (b.modulos||"").split(",").map(s=>s.trim()).filter(Boolean).forEach(m=>est[b.estacion].modsPlan.add(m)); });
+      blo.forEach(b=>{ if(b.estacion===SUP_MARK) return; const dP=diasHabiles(b.fecha_desde,b.fecha_hasta,b.proyecto_id).filter(esRealInf); if(!est[b.estacion])est[b.estacion]={planD:new Set(),realD:new Set(),costo:0,hsExtra:0,modsPlan:new Set(),modsReal:new Set()}; dP.forEach(d=>est[b.estacion].planD.add(d)); (b.modulos||"").split(",").map(s=>s.trim()).filter(Boolean).forEach(m=>est[b.estacion].modsPlan.add(m)); });
       det.forEach(f=>{ if(f.estacion_real===SUP_MARK) return; if(!esRealInf(f.fecha)) return; if(!est[f.estacion_real])est[f.estacion_real]={planD:new Set(),realD:new Set(),costo:0,hsExtra:0,modsPlan:new Set(),modsReal:new Set()}; if(!f.ausente){est[f.estacion_real].realD.add(f.fecha); const ch=costoHora(f.persona_real, f.fecha); est[f.estacion_real].costo+=(Number(f.horas_normales)||0)*ch+(Number(f.horas_extra)||0)*ch*multExtra(f.fecha); est[f.estacion_real].hsExtra+=(Number(f.horas_extra)||0); (f.modulos_real||"").split(",").map(s=>s.trim()).filter(Boolean).forEach(m=>est[f.estacion_real].modsReal.add(m));} else { const ch=costoHora(f.persona_real, f.fecha); const hp=(f.horas_plan!=null?Number(f.horas_plan):Number(f.horas_normales)||0); est[f.estacion_real].costo+=hp*ch; } });
 
       const fmt=(n)=>'$'+Math.round(n).toLocaleString("es-AR");
@@ -4823,7 +4876,7 @@
         bloquesPlanBase.forEach(b=>{
           if(b.estacion===SUP_MARK) return;
           acumPlanRango(b.estacion, b.fecha_desde, b.fecha_hasta);
-          const nd = diasHabiles(b.fecha_desde,b.fecha_hasta).length;
+          const nd = diasHabiles(b.fecha_desde,b.fecha_hasta,b.proyecto_id).length;
           const refFecha = b.fecha_desde || hoyISO();
           (b.personas||[]).forEach(pp=>{ const ch=costoHora(pp.persona_id, refFecha); estCostoPlan[b.estacion]=(estCostoPlan[b.estacion]||0)+ (Number(pp.horas)||8)*ch*nd; });
         });
@@ -4831,7 +4884,7 @@
         blo.forEach(b=>{
           if(b.estacion===SUP_MARK) return;
           acumPlanRango(b.estacion, b.fecha_desde, b.fecha_hasta);
-          const nd = diasHabiles(b.fecha_desde,b.fecha_hasta).length;
+          const nd = diasHabiles(b.fecha_desde,b.fecha_hasta,b.proyecto_id).length;
           const refFecha = b.fecha_desde || hoyISO();
           (planiPers[b.id]||[]).forEach(pid=>{ const hrs=(planiHoras[b.id]&&planiHoras[b.id][pid]!=null)?planiHoras[b.id][pid]:8; const ch=costoHora(pid, refFecha); estCostoPlan[b.estacion]=(estCostoPlan[b.estacion]||0)+ hrs*ch*nd; });
         });
@@ -5242,31 +5295,36 @@
         const vhReal = costoHora(f.persona_real, f.fecha);
         const vhPlan = (f.valor_hora_plan!=null?Number(f.valor_hora_plan):vhReal);
         const mult = multExtra(f.fecha);
+        // Sábado habilitado = día hábil real pero con recargo: toda la jornada (plan y
+        // real) se paga al multiplicador. Aplica en ambos lados, así el recargo es
+        // "planificado" (no genera desvío artificial) y la descomposición sigue sumando.
+        const esSab = !!f.fecha && new Date(f.fecha+"T12:00:00").getDay()===6;
+        const jm = esSab ? mult : 1;
         if(f.ausente){
           ausencias++;
           // El directo es mensualizado: se le paga igual la jornada planificada, aunque no produzca.
-          const pagoAusencia = hp*vhReal;
+          const pagoAusencia = hp*vhReal*jm;
           costoReal += pagoAusencia;
           costoImproductivo += pagoAusencia;
         }
         else {
-          costoReal += hn*vhReal + he*vhReal*mult;
+          costoReal += hn*vhReal*jm + he*vhReal*mult;
           extraCosto += he*vhReal*mult;
           jornales += hn/8;
           hsExtra += he;
           jornalesPlan += hp/8;
         }
-        costoPlan += hp*vhPlan;
+        costoPlan += hp*vhPlan*jm;
         // --- descomposición (suma exacta del desvío) ---
         // efecto tarifa: mismas horas plan, diferencia de valor-hora (aplica también a ausentes: se pagó a vhReal)
-        efTarifa += hp*(vhReal - vhPlan);
+        efTarifa += hp*(vhReal - vhPlan)*jm;
         if(f.ausente){
           // Ausencia pagada: real = hp*vhReal, plan = hp*vhPlan. La diferencia YA está en efTarifa.
           // No agrega desvío por horas (se pagó lo planificado). Su peso se muestra aparte como costo improductivo.
           efAusencia += 0;
         } else {
           // efecto horas normales: (horas reales - plan) a valor real
-          efHoras += (hn - hp)*vhReal;
+          efHoras += (hn - hp)*vhReal*jm;
           // efecto extra: las horas extra (no estaban en el plan)
           efExtra += he*vhReal*mult;
         }
@@ -5663,7 +5721,7 @@
       delete ultimoDirectoSacado[bloqueId]; delete ultimoContratistaAgregado[bloqueId];
       const b = plani.find(x => x.id === bloqueId);
       if (!b) return;
-      const dias = diasHabiles(b.fecha_desde, b.fecha_hasta).filter(f => f >= hoyISO());
+      const dias = diasHabiles(b.fecha_desde, b.fecha_hasta, b.proyecto_id).filter(f => f >= hoyISO());
       if (!dias.length) return;
       const horasFuturas = dias.length * (Number(horas) || 8);
       const jornales = horasFuturas / 8;
@@ -5690,7 +5748,7 @@
       plani.forEach(b => {
         if (b.id === exceptoPlaniId) return;
         if (!(planiPers[b.id]||[]).includes(personaId)) return;
-        if (!diasHabiles(b.fecha_desde, b.fecha_hasta).includes(fecha)) return;
+        if (!diasHabiles(b.fecha_desde, b.fecha_hasta, b.proyecto_id).includes(fecha)) return;
         tot += (planiHoras[b.id] && planiHoras[b.id][personaId] != null) ? planiHoras[b.id][personaId] : 8;
       });
       return tot;
@@ -5725,7 +5783,7 @@
       if (!planiHoras[planiId]) planiHoras[planiId] = {}; planiHoras[planiId][personaId] = horas;
       // chequear si ahora hay algún día con más de 8h
       const b = plani.find(x => x.id === planiId);
-      const dias = diasHabiles(b.fecha_desde, b.fecha_hasta);
+      const dias = diasHabiles(b.fecha_desde, b.fecha_hasta, b.proyecto_id);
       let aviso = null;
       const pEditada = personas.find(x => x.id === personaId);
       // Un directo es una persona única y no puede estar en dos lados a la vez, pero
