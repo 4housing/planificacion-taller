@@ -1099,10 +1099,11 @@
       contenido.innerHTML = h;
     }
     // Bloque "Sábados habilitados" por proyecto (día hábil real, con recargo en el costo).
+    let sabadosModoUI = {}; // recuerda el modo elegido (p.ej. "algunos" sin fechas aún)
     function bloqueSabados(pr){
       const sabTodos = !!pr.sabados_todos;
       const sabList = [...(proyectoSabados[pr.id] || new Set())].sort();
-      const modo = sabTodos ? 'todos' : (sabList.length ? 'algunos' : 'ninguno');
+      const modo = sabadosModoUI[pr.id] || (sabTodos ? 'todos' : (sabList.length ? 'algunos' : 'ninguno'));
       const rb = (val,lbl)=> '<label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer"><input type="radio" name="sab-'+pr.id+'" '+(modo===val?'checked':'')+' onchange="setSabadosModo(\''+pr.id+'\',\''+val+'\')" style="width:auto;margin:0"> '+lbl+'</label>';
       let h = '<div class="lbl" style="grid-column:1/-1;background:#FBFAF5;border:1px solid #EFE7D6;border-radius:10px;padding:10px 12px">';
       h += '<div style="font-size:12px;font-weight:600;color:#8A6D1F;margin-bottom:7px">Sábados habilitados <span style="font-weight:400;color:#A8A69E">· día hábil real del proyecto, con recargo en el costo</span></div>';
@@ -1117,9 +1118,13 @@
       return h;
     }
     async function setSabadosModo(id, modo){
+      sabadosModoUI[id] = modo; // recordar la elección (sobre todo "algunos" sin fechas aún)
       if(modo==='todos'){ const {error}=await sb.from("planificacion_proyectos").update({sabados_todos:true}).eq("id",id); if(error)return setEstado("Error: "+error.message,"err"); }
       else { const {error}=await sb.from("planificacion_proyectos").update({sabados_todos:false}).eq("id",id); if(error)return setEstado("Error: "+error.message,"err"); if(modo==='ninguno'){ const {error:e2}=await sb.from("planificacion_proyecto_sabados").delete().eq("proyecto_id",id); if(e2)return setEstado("Error: "+e2.message,"err"); } }
-      setEstado("✓ Sábados actualizados.","ok"); cargar();
+      const pr=proyectos.find(p=>p.id===id); if(pr) pr.sabados_todos=(modo==='todos'); // reflejar sin recargar todo
+      if(modo==='ninguno') proyectoSabados[id]=new Set();
+      renderProyectos();
+      setEstado("✓ Sábados actualizados.","ok");
     }
     async function agregarSabado(id){
       const inp=document.getElementById("sabadd-"+id); const f=inp&&inp.value; if(!f) return setEstado("Elegí una fecha.","err");
