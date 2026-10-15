@@ -4369,6 +4369,18 @@
     function setHistoProy(v){ histoProy=v; if(SEDE==="neuquen") renderHistoNqn(); else renderHisto(); }
 
     /* ---- GANTT ---- */
+    // Gantt e histograma muestran todas las fechas en columnas: al abrir, se desplaza la tabla
+    // para que arranque en HOY (o el próximo día con datos) y se resalta la columna de hoy.
+    function enfocarHoy(fechas){
+      try{
+        const hoy = fechaStr(new Date());
+        let i = fechas.findIndex(d=>d>=hoy); if(i<0) i = fechas.length-1; if(i<0) return;
+        const tabla = contenido.querySelector("table"); if(!tabla) return;
+        const ths = tabla.querySelectorAll("thead tr:first-child th"); const th = ths[i+1]; if(!th) return;
+        if(fechas[i]===hoy){ th.style.background="#FBE9D4"; th.style.color="#7A4708"; th.title="Hoy"; }
+        const cont = tabla.parentElement; if(cont) cont.scrollLeft = Math.max(0, th.offsetLeft - ths[0].offsetWidth - 8);
+      }catch(e){ console.warn("enfocarHoy:", e); }
+    }
     function renderGantt() {
       if(!plani.length){ contenido.innerHTML='<p style="font-size:13px;color:#888780">No hay planificación cargada.</p>'; return; }
       // Acumular por ESTACIÓN (una sola fila por estación). Supervisor queda EXCLUIDO.
@@ -4420,6 +4432,7 @@
       });
       h+='</tbody></table></div></div>';
       contenido.innerHTML=h;
+      enfocarHoy(fechas);
     }
 
     /* ---- HISTOGRAMA ---- */
@@ -4458,6 +4471,7 @@
       });
       h+='</tbody></table></div></div>';
       contenido.innerHTML=h;
+      enfocarHoy(fechas);
     }
 
     /* ---- GANTT — BASE NEUQUÉN (filas = trailers) ---- */
@@ -4503,6 +4517,7 @@
       });
       h+='</tbody></table></div></div>';
       contenido.innerHTML=h;
+      enfocarHoy(fechas);
     }
 
     /* ---- HISTOGRAMA — BASE NEUQUÉN (filas = personas, color por tarea) ---- */
@@ -4538,12 +4553,15 @@
       });
       h+='</tbody></table></div></div>';
       contenido.innerHTML=h;
+      enfocarHoy(fechas);
     }
 
     function renderParte() {
       const proyOperP = new Set(proyectosOperativos().map(p=>p.id));
       const fechas=[...new Set(detalle.filter(f=>proyOperP.has(f.proyecto_id)).map(f=>f.fecha))].sort();
-      const fSel = parteFecha || fechas[0] || "";
+      // Abre en HOY; si hoy no tiene jornadas (finde/feriado), en el próximo día con jornadas; si no hay ninguno futuro, en el último.
+      const hoyP = fechaStr(new Date());
+      const fSel = parteFecha || (fechas.includes(hoyP) ? hoyP : (fechas.find(d=>d>=hoyP) || fechas[fechas.length-1] || ""));
       let rows = detalle.filter(f=>f.fecha===fSel && !f.ausente && proyOperP.has(f.proyecto_id));
       if(parteProy) rows=rows.filter(f=>f.proyecto_id===parteProy);
       if(parteEst) rows=rows.filter(f=>f.estacion_real===parteEst);
