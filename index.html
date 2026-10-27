@@ -215,6 +215,7 @@
           { id:"nqn_trailers", label:"Trailers", c:"#E6F1FB" },
           { id:"nqn_manten", label:"Planificación", c:"#E8F3DE" },
           { id:"nqn_detalle", label:"Detalle diario", c:"#E1F5EE" },
+          { id:"nqn_agenda", label:"Agenda", c:"#E9E4F5" },
           { id:"nqn_gantt", label:"Gantt", c:"#DEEEF5" },
           { id:"nqn_histo", label:"Histograma", c:"#F2E8D8" },
           { id:"nqn_parte", label:"Parte diario", c:"#D9F0E6" },
@@ -259,6 +260,7 @@
       trailerEstadoFiltro = ""; mantTrailerFiltro = ""; mantDesdeFiltro = "";
       renderTabs();
       cargar();
+      if (s === "neuquen" && puedeVerNeuquen()) recordatoriosAgendaNqn();
     }
     let personas = [], proyectos = [], dispo = [], plani = [], planiPers = {}, planiHoras = {}, detalle = [], feriados = [], supervisiones = [];
     let planiCant = {}; // bloqueId -> { personaId: cantidad de personas } · solo contratistas, a efectos de control
@@ -446,6 +448,13 @@
         { const { data, error } = await leerTodas(()=>sb.from("planificacion_detalle_diario").select("*").eq("sede","neuquen")); if (error) return errLoad(error); detalle = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0); }
         setEstado("\u2713 " + detalle.length + " registro(s) en el detalle de Neuquén.", "ok");
         renderDetalleNqn();
+        return;
+      }
+      if (tab === "nqn_agenda") {
+        if (!personas.length) { const { data } = await sb.from("planificacion_personal").select("*"); personas = (data||[]).sort((a,b)=>{if(a.tipo!==b.tipo)return a.tipo==="Directo"?-1:1;return (parseInt(a.legajo)||9999)-(parseInt(b.legajo)||9999);}); }
+        await cargarAgendaNqn();
+        setEstado("✓ Agenda · Base Neuquén.", "ok");
+        renderAgendaNqn();
         return;
       }
       if (tab === "nqn_informe") {
@@ -5831,8 +5840,317 @@
       h += '</tbody></table><div class="row-actions"><button class="btn btn-primary" onclick="cargar()">\u21bb Recargar</button></div>';
       contenido.innerHTML = h;
     }
+    // ============================================================ AGENDA · Base Neuquén
+    // Portada de la Agenda del CRM comercial, acotada a Base Neuquén. Tareas con vencimiento
+    // asignables al personal de Neuquén + "Leandro Chinni". Tabla: planificacion_agenda_tareas
+    // (ver sql/006_agenda_tareas.sql). La conexión a Outlook queda pendiente (requiere Azure).
+    let agAgendaTareas = [];        // filas de planificacion_agenda_tareas (sede neuquen)
+    let agVistaNqn = "lista";       // 'lista' | 'calendario'
+    let agSoloMiasNqn = false;      // filtro "Mis pendientes" (default: todo el equipo)
+    let agMesRefNqn = null;         // {y,m} para la vista calendario
+    let _agRecordAbierto = false;   // estado del cartel de recordatorio
+    const AG_TIPOS = { tarea: { lbl:"Tarea", color:"#7b5ea7" } };
+    const AG_PRIORIDADES = { alta:"Alta", media:"Media", baja:"Baja" };
+
+    function _agEsc(v){ return (v==null?"":String(v)).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+    function _agNorm(s){ try { return (s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().replace(/\s+/g," ").trim(); } catch(e){ return (s||"").toLowerCase().trim(); } }
+    function _agDias(iso){ if(!iso) return null; const h=new Date(hoyISO()+"T12:00:00"); const d=new Date(iso.slice(0,10)+"T12:00:00"); return Math.round((d-h)/86400000); }
+
+    // Responsables asignables: personal de Neuquén + "Leandro Chinni" (mismo patrón que Stock).
+    function _agResponsables(){
+      const ns = personasDe("neuquen").map(p=>p.nombre).filter(Boolean);
+      if(!ns.some(n=>_agNorm(n)==="leandro chinni")) ns.push("Leandro Chinni");
+      return ns.sort((a,b)=>a.localeCompare(b,"es"));
+    }
+
+    async function cargarAgendaNqn(){
+      // La tabla puede no existir todavía (antes de correr el SQL): no romper, mostrar vacío.
+      try {
+        const { data, error } = await sb.from("planificacion_agenda_tareas").select("*").eq("sede","neuquen");
+        agAgendaTareas = error ? [] : (data || []);
+      } catch(e){ agAgendaTareas = []; }
+    }
+
+    // Items unificados (hoy: solo tareas; las reuniones de Outlook se sumarán cuando haya MSAL).
+    function _agItems(){
+      const out = [];
+      (agAgendaTareas||[]).forEach(t=>{
+        if (t.estado==="hecha" || !t.fecha) return;
+        out.push({ fecha:String(t.fecha).slice(0,10), hora:t.hora||"", tipo:"tarea",
+          titulo:t.titulo||"(sin título)", contexto:t.detalle||"", persona:t.asignado_a||"",
+          prioridad:t.prioridad||"media", tareaId:t.id });
+      });
+      out.sort((a,b)=> a.fecha<b.fecha?-1 : a.fecha>b.fecha?1 : (a.hora||"").localeCompare(b.hora||""));
+      return out;
+    }
+    function _agDe(items, nombre){ const n=_agNorm(nombre); return items.filter(i=>_agNorm(i.persona)===n); }
+
+    function renderAgendaNqn(){
+      ensureAgendaStylesNqn();
+      const puedeEditar = edicionPermitidaActual();
+      const yo = miNombre || "";
+      const puedeFiltrarMias = !!(yo && _agResponsables().some(n=>_agNorm(n)===_agNorm(yo)));
+      const todos = _agItems();
+      const items = (puedeFiltrarMias && agSoloMiasNqn) ? _agDe(todos, yo) : todos;
+      const vencidos = items.filter(i=>{ const d=_agDias(i.fecha); return d!=null && d<0; }).length;
+
+      let h = '<div class="agn-head"><div><h2 class="agn-h2">Agenda · Base Neuquén</h2>'
+        + '<div class="agn-sub">Tareas y vencimientos del equipo de Neuquén</div></div>'
+        + '<div class="agn-head-actions"><div class="agn-seg">'
+        + '<button class="'+(agVistaNqn==="lista"?"on":"")+'" onclick="agSetVistaNqn(\'lista\')">Lista</button>'
+        + '<button class="'+(agVistaNqn==="calendario"?"on":"")+'" onclick="agSetVistaNqn(\'calendario\')">Calendario</button></div>'
+        + (puedeEditar ? '<button class="btn btn-primary" onclick="abrirTareaAgendaNqn(null)">+ Nueva tarea</button>' : '')
+        + '</div></div>';
+
+      h += '<div class="agn-bar2">';
+      if (puedeFiltrarMias) {
+        h += '<div class="agn-seg">'
+          + '<button class="'+(agSoloMiasNqn?"on":"")+'" onclick="agToggleMiasNqn(true)">Mis pendientes</button>'
+          + '<button class="'+(!agSoloMiasNqn?"on":"")+'" onclick="agToggleMiasNqn(false)">Todo el equipo</button></div>';
+      } else { h += '<div></div>'; }
+      h += '<div class="agn-count">'+items.length+' pendiente(s)'+(vencidos?' · <b class="agn-venc">'+vencidos+' vencido(s)</b>':'')+'</div></div>';
+
+      if (agVistaNqn==="calendario"){
+        const ref = agMesRefNqn || (function(){ const n=new Date(); return {y:n.getFullYear(), m:n.getMonth()}; })();
+        let nombreMes = new Date(ref.y, ref.m, 1).toLocaleDateString("es-AR",{month:"long",year:"numeric"});
+        h += '<div class="agn-mes"><button class="btn" onclick="agMesNqn(-1)">←</button><span>'+_agEsc(nombreMes)+'</span><button class="btn" onclick="agMesNqn(1)">→</button></div>';
+        h += _agCalendarioHTML(items, puedeEditar);
+      } else {
+        const grupos = [
+          {t:"Vencidos", f:d=>d<0, venc:true},
+          {t:"Hoy", f:d=>d===0},
+          {t:"Mañana", f:d=>d===1},
+          {t:"Próximos 7 días", f:d=>d>1&&d<=7},
+          {t:"Más adelante", f:d=>d>7},
+        ];
+        let body="";
+        grupos.forEach(g=>{
+          const gi = items.filter(i=>{ const d=_agDias(i.fecha); return d!=null && g.f(d); });
+          if(!gi.length) return;
+          body += '<div class="agn-grp"><div class="agn-grp-h'+(g.venc?" venc":"")+'">'+g.t+' <span>'+gi.length+'</span></div>'
+            + gi.map(it=>_agItemHTML(it,puedeEditar)).join("") + '</div>';
+        });
+        if(!body) body = '<div class="agn-empty">No hay pendientes'+(puedeFiltrarMias&&agSoloMiasNqn?" asignados a vos":"")+'. 🎉</div>';
+        h += body;
+      }
+      contenido.innerHTML = h;
+    }
+
+    function _agItemHTML(it, puedeEditar){
+      const d = _agDias(it.fecha);
+      let cuando="";
+      if(d<0) cuando='<span class="agn-venc">Vencido hace '+Math.abs(d)+' día'+(Math.abs(d)===1?"":"s")+'</span>';
+      else if(d===0) cuando='<span class="agn-hoy">Vence hoy</span>';
+      else if(d===1) cuando="Mañana";
+      else cuando="En "+d+" días";
+      const t = AG_TIPOS[it.tipo] || {lbl:it.tipo,color:"#888"};
+      const dd = it.fecha.slice(8,10), mm = it.fecha.slice(5,7);
+      const check = (puedeEditar && it.tareaId) ? '<button class="agn-check" title="Marcar hecha" onclick="event.stopPropagation();marcarHechaAgendaNqn(\''+it.tareaId+'\')"></button>' : '';
+      const clickable = (puedeEditar && it.tareaId) ? ' onclick="abrirTareaAgendaNqn(\''+it.tareaId+'\')" style="cursor:pointer;border-left-color:'+t.color+'"' : ' style="border-left-color:'+t.color+'"';
+      let meta = '<span class="agn-tag" style="background:'+t.color+'">'+t.lbl+'</span>&nbsp;'+cuando;
+      if(it.hora) meta += ' · '+_agEsc(it.hora)+' hs';
+      if(it.prioridad==="alta") meta += ' · <b style="color:#b0584f">Prioridad alta</b>';
+      if(it.persona) meta += ' · '+_agEsc(it.persona);
+      return '<div class="agn-item"'+clickable+'>'
+        + '<div class="agn-d"><div class="dd">'+dd+'</div><div class="mm">'+mm+'</div></div>'
+        + '<div class="agn-b"><div class="tt">'+_agEsc(it.titulo)+'</div>'
+        + (it.contexto?'<div class="cx">'+_agEsc(it.contexto)+'</div>':'')
+        + '<div class="mt">'+meta+'</div></div>' + check + '</div>';
+    }
+
+    function _agCalendarioHTML(items, puedeEditar){
+      const ref = agMesRefNqn || (function(){ const n=new Date(); return {y:n.getFullYear(), m:n.getMonth()}; })();
+      const primero = new Date(ref.y, ref.m, 1);
+      const corr = (primero.getDay()+6)%7; // semana arranca lunes
+      const diasMes = new Date(ref.y, ref.m+1, 0).getDate();
+      const porDia = {}; items.forEach(i=>{ (porDia[i.fecha]=porDia[i.fecha]||[]).push(i); });
+      const hoy = hoyISO();
+      let h = '<div class="agn-cal">';
+      ["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"].forEach(d=> h+='<div class="agn-dow">'+d+'</div>');
+      for(let i=0;i<42;i++){
+        const diaNum = i-corr+1;
+        if(diaNum<1 || diaNum>diasMes){ h+='<div class="agn-cell off"></div>'; continue; }
+        const iso = fechaStr(new Date(ref.y, ref.m, diaNum));
+        const lista = porDia[iso]||[];
+        const cellClick = puedeEditar ? ' onclick="abrirTareaAgendaNqn(null,\''+iso+'\')" style="cursor:pointer"' : '';
+        h += '<div class="agn-cell'+(iso===hoy?" today":"")+'"'+cellClick+'><div class="n">'+diaNum+'</div>';
+        lista.slice(0,3).forEach(it=>{
+          const col = (AG_TIPOS[it.tipo]||{color:"#888"}).color;
+          const chipClick = (puedeEditar && it.tareaId) ? ' onclick="event.stopPropagation();abrirTareaAgendaNqn(\''+it.tareaId+'\')"' : '';
+          h += '<div class="agn-chip" style="background:'+col+'"'+chipClick+' title="'+_agEsc(it.titulo)+'">'+_agEsc(it.titulo)+'</div>';
+        });
+        if(lista.length>3) h += '<div class="agn-more">+'+(lista.length-3)+' más</div>';
+        h += '</div>';
+      }
+      return h+'</div>';
+    }
+
+    function agSetVistaNqn(v){ agVistaNqn=v; renderAgendaNqn(); }
+    function agToggleMiasNqn(v){ agSoloMiasNqn=v; renderAgendaNqn(); }
+    function agMesNqn(delta){
+      const ref = agMesRefNqn || (function(){ const n=new Date(); return {y:n.getFullYear(), m:n.getMonth()}; })();
+      let m = ref.m + delta, y = ref.y;
+      while(m<0){ m+=12; y--; } while(m>11){ m-=12; y++; }
+      agMesRefNqn = {y, m}; renderAgendaNqn();
+    }
+
+    function _agCampo(label, inner){ return '<div style="margin-bottom:10px"><label style="display:block;font-size:12px;color:#6b7563;margin-bottom:4px">'+label+'</label>'+inner+'</div>'; }
+    function cerrarTareaAgendaNqn(){ const ov=document.getElementById("ovAgenda"); if(ov) ov.remove(); }
+    function abrirTareaAgendaNqn(id, fechaSug){
+      cerrarTareaAgendaNqn();
+      const t = id ? (agAgendaTareas||[]).find(x=>x.id===id) : null;
+      const resp = _agResponsables();
+      const asignadoDef = t ? (t.asignado_a||"") : (miNombre||"");
+      const optResp = '<option value="">— sin asignar —</option>' + resp.map(n=>'<option value="'+_agEsc(n)+'"'+(_agNorm(n)===_agNorm(asignadoDef)?" selected":"")+'>'+_agEsc(n)+'</option>').join("");
+      const pri = t ? (t.prioridad||"media") : "media";
+      const optPri = ["alta","media","baja"].map(p=>'<option value="'+p+'"'+(p===pri?" selected":"")+'>'+AG_PRIORIDADES[p]+'</option>').join("");
+      const fecha = t ? (t.fecha? String(t.fecha).slice(0,10):"") : (fechaSug||hoyISO());
+      const ov = document.createElement("div"); ov.id="ovAgenda";
+      ov.style.cssText = "position:fixed;inset:0;background:rgba(44,44,42,.45);display:flex;align-items:center;justify-content:center;z-index:2000;padding:16px";
+      ov.innerHTML = '<div style="background:#fff;border-radius:16px;max-width:480px;width:100%;padding:22px;box-shadow:0 12px 40px rgba(0,0,0,.2);max-height:90vh;overflow:auto">'
+        + '<h3 style="margin:0 0 14px;font-size:17px;color:#37432C">'+(id?"Editar tarea":"Nueva tarea")+'</h3>'
+        + _agCampo("Qué hay que hacer", '<input id="ag_tit" type="text" value="'+_agEsc(t?t.titulo:"")+'" placeholder="Título de la tarea" style="width:100%">')
+        + '<div style="display:flex;gap:10px"><div style="flex:1">'+_agCampo("Vence", '<input id="ag_fec" type="date" value="'+fecha+'" style="width:100%">')+'</div>'
+        + '<div style="flex:1">'+_agCampo("Hora (opcional)", '<input id="ag_hor" type="time" value="'+_agEsc(t?(t.hora||""):"")+'" style="width:100%">')+'</div></div>'
+        + '<div style="display:flex;gap:10px"><div style="flex:1">'+_agCampo("Asignada a", '<select id="ag_asg" style="width:100%">'+optResp+'</select>')+'</div>'
+        + '<div style="flex:1">'+_agCampo("Prioridad", '<select id="ag_pri" style="width:100%">'+optPri+'</select>')+'</div></div>'
+        + _agCampo("Detalle (opcional)", '<textarea id="ag_det" rows="3" style="width:100%">'+_agEsc(t?(t.detalle||""):"")+'</textarea>')
+        + '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:18px;gap:8px">'
+        + '<div>'+(id?'<button class="btn" style="color:#b0584f" onclick="borrarTareaAgendaNqn(\''+id+'\')">Eliminar</button>':'')+'</div>'
+        + '<div style="display:flex;gap:8px">'+(id?'<button class="btn" onclick="marcarHechaAgendaNqn(\''+id+'\')">Marcar hecha</button>':'')
+        + '<button class="btn" onclick="cerrarTareaAgendaNqn()">Cancelar</button>'
+        + '<button class="btn btn-primary" onclick="guardarTareaAgendaNqn('+(id?("'"+id+"'"):"null")+')">Guardar</button></div></div></div>';
+      document.body.appendChild(ov);
+      ov.addEventListener("mousedown", e=>{ if(e.target===ov) cerrarTareaAgendaNqn(); });
+      const ti=document.getElementById("ag_tit"); if(ti) ti.focus();
+    }
+
+    async function guardarTareaAgendaNqn(id){
+      const tit = (document.getElementById("ag_tit").value||"").trim();
+      const fecha = document.getElementById("ag_fec").value;
+      if(!tit){ setEstado("Poné un título para la tarea.","err"); return; }
+      if(!fecha){ setEstado("Poné una fecha de vencimiento.","err"); return; }
+      const row = {
+        sede:"neuquen", titulo:tit,
+        detalle:(document.getElementById("ag_det").value||"").trim()||null,
+        fecha:fecha, hora:document.getElementById("ag_hor").value||null,
+        asignado_a:document.getElementById("ag_asg").value||null,
+        prioridad:document.getElementById("ag_pri").value||"media",
+        updated_at:new Date().toISOString()
+      };
+      let error;
+      if(id){ ({ error } = await sb.from("planificacion_agenda_tareas").update(row).eq("id", id)); }
+      else { row.estado="pendiente"; row.creado_por=miEmail||null; ({ error } = await sb.from("planificacion_agenda_tareas").insert(row)); }
+      if(error){ setEstado("Error al guardar: "+error.message,"err"); return; }
+      registrarLog(id?"editar":"crear","agenda", tit+(row.asignado_a?(" → "+row.asignado_a):"")+" · vence "+dmy(fecha));
+      cerrarTareaAgendaNqn();
+      await cargarAgendaNqn();
+      setEstado("✓ Tarea guardada.","ok");
+      renderAgendaNqn();
+    }
+
+    async function marcarHechaAgendaNqn(id){
+      const { error } = await sb.from("planificacion_agenda_tareas").update({ estado:"hecha", updated_at:new Date().toISOString() }).eq("id", id);
+      if(error){ setEstado("Error: "+error.message,"err"); return; }
+      const t=(agAgendaTareas||[]).find(x=>x.id===id);
+      registrarLog("editar","agenda","Hecha: "+(t?t.titulo:id));
+      cerrarTareaAgendaNqn();
+      await cargarAgendaNqn();
+      setEstado("✓ Marcada como hecha.","ok");
+      if(_agRecordAbierto) recordatoriosAgendaNqn(true);
+      if(tab==="nqn_agenda") renderAgendaNqn();
+    }
+
+    async function borrarTareaAgendaNqn(id){
+      if(!confirm("¿Eliminar esta tarea de la agenda?")) return;
+      const t=(agAgendaTareas||[]).find(x=>x.id===id);
+      const { error } = await sb.from("planificacion_agenda_tareas").delete().eq("id", id);
+      if(error){ setEstado("Error: "+error.message,"err"); return; }
+      registrarLog("eliminar","agenda", t?t.titulo:id);
+      cerrarTareaAgendaNqn();
+      await cargarAgendaNqn();
+      setEstado("✓ Tarea eliminada.","ok");
+      if(tab==="nqn_agenda") renderAgendaNqn();
+    }
+
+    function cerrarRecordatorioAgendaNqn(){ const ov=document.getElementById("ovRecord"); if(ov) ov.remove(); _agRecordAbierto=false; }
+    // Cartel al abrir: pendientes del equipo de Neuquén vencidos o que vencen hoy (1 vez por día).
+    async function recordatoriosAgendaNqn(force){
+      try {
+        if(SEDE!=="neuquen") return;
+        if(typeof puedeVerNeuquen==="function" && !puedeVerNeuquen()) return;
+        const clave = "ag_record_nqn_" + _agNorm(miEmail||miNombre||"user").replace(/\s/g,"_");
+        let visto=null; try{ visto=localStorage.getItem(clave); }catch(e){}
+        if(!force && visto===hoyISO()) return;
+        if(!agAgendaTareas || !agAgendaTareas.length) await cargarAgendaNqn();
+        const items = _agItems().filter(i=>{ const d=_agDias(i.fecha); return d!=null && d<=0; });
+        if(!items.length){ if(force) cerrarRecordatorioAgendaNqn(); return; }
+        cerrarRecordatorioAgendaNqn();
+        ensureAgendaStylesNqn();
+        const ov=document.createElement("div"); ov.id="ovRecord";
+        ov.style.cssText="position:fixed;inset:0;background:rgba(44,44,42,.45);display:flex;align-items:center;justify-content:center;z-index:2100;padding:16px";
+        ov.innerHTML = '<div style="background:#fff;border-radius:16px;max-width:540px;width:100%;padding:22px;box-shadow:0 12px 40px rgba(0,0,0,.2);max-height:88vh;overflow:auto">'
+          + '<h3 style="margin:0 0 4px;font-size:17px;color:#37432C">📌 Pendientes de Base Neuquén</h3>'
+          + '<div style="font-size:12.5px;color:#6b7563;margin-bottom:14px">Hay '+items.length+' tarea(s) vencida(s) o que vencen hoy.</div>'
+          + items.slice(0,8).map(it=>_agItemHTML(it,false)).join("")
+          + (items.length>8?'<div style="font-size:12px;color:#888780;margin:6px 2px">y '+(items.length-8)+' más…</div>':'')
+          + '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">'
+          + '<button class="btn" onclick="cerrarRecordatorioAgendaNqn()">Después</button>'
+          + '<button class="btn btn-primary" onclick="cerrarRecordatorioAgendaNqn();cambiarTab(\'nqn_agenda\')">Ver la agenda</button></div></div>';
+        document.body.appendChild(ov);
+        ov.addEventListener("mousedown", e=>{ if(e.target===ov) cerrarRecordatorioAgendaNqn(); });
+        _agRecordAbierto=true;
+        try{ localStorage.setItem(clave, hoyISO()); }catch(e){}
+      } catch(e){ /* el recordatorio nunca debe frenar el arranque */ }
+    }
+
+    function ensureAgendaStylesNqn(){
+      if(document.getElementById("agnStyles")) return;
+      const s=document.createElement("style"); s.id="agnStyles";
+      s.textContent = `
+      .agn-head{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+      .agn-h2{margin:0;font-size:19px;color:#37432C}
+      .agn-sub{font-size:12.5px;color:#888780;margin-top:2px}
+      .agn-head-actions{display:flex;gap:10px;align-items:center}
+      .agn-seg{display:inline-flex;border:1px solid #DDD9CE;border-radius:9px;overflow:hidden;background:#F6F5F0}
+      .agn-seg button{border:0;background:transparent;padding:6px 12px;font-size:12.5px;cursor:pointer;color:#6b7563}
+      .agn-seg button.on{background:#5F7A4E;color:#fff}
+      .agn-bar2{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+      .agn-count{font-size:12.5px;color:#888780}
+      .agn-venc{color:#b0584f}
+      .agn-grp{margin-bottom:16px}
+      .agn-grp-h{font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:#888780;font-weight:700;margin-bottom:7px;display:flex;align-items:center;gap:7px}
+      .agn-grp-h.venc{color:#b0584f}
+      .agn-grp-h span{background:#EEECE4;color:#6b7563;border-radius:10px;padding:1px 8px;font-size:11px}
+      .agn-item{display:flex;gap:12px;align-items:flex-start;background:#fff;border:1px solid #EEECE4;border-left:4px solid #888;border-radius:11px;padding:11px 13px;margin-bottom:8px}
+      .agn-item:hover{box-shadow:0 2px 10px rgba(0,0,0,.06)}
+      .agn-d{text-align:center;min-width:34px}
+      .agn-d .dd{font-size:18px;font-weight:800;color:#37432C;line-height:1}
+      .agn-d .mm{font-size:10px;color:#A8A69E}
+      .agn-b{flex:1;min-width:0}
+      .agn-b .tt{font-weight:600;color:#37432C;font-size:13.5px}
+      .agn-b .cx{font-size:12px;color:#888780;margin-top:1px;white-space:pre-wrap}
+      .agn-b .mt{font-size:11.5px;color:#888780;margin-top:4px}
+      .agn-tag{display:inline-block;color:#fff;border-radius:10px;padding:1px 8px;font-size:10.5px;font-weight:600}
+      .agn-hoy{color:#b3853a;font-weight:600}
+      .agn-check{width:20px;height:20px;border:2px solid #C9CBBD;border-radius:6px;background:#fff;cursor:pointer;flex-shrink:0}
+      .agn-check:hover{border-color:#5F7A4E;background:#EEF3E6}
+      .agn-empty{text-align:center;color:#A8A69E;font-size:13px;padding:34px}
+      .agn-mes{display:flex;align-items:center;gap:12px;justify-content:center;margin-bottom:12px;font-size:14px;font-weight:600;color:#37432C;text-transform:capitalize}
+      .agn-cal{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}
+      .agn-dow{text-align:center;font-size:11px;color:#A8A69E;font-weight:600;padding-bottom:3px}
+      .agn-cell{min-height:80px;border:1px solid #EEECE4;border-radius:9px;padding:4px;background:#fff}
+      .agn-cell.off{background:#FAFAF8;border-color:#F2F1EB}
+      .agn-cell.today{border-color:#5F7A4E;box-shadow:inset 0 0 0 1px #5F7A4E}
+      .agn-cell .n{font-size:11px;color:#A8A69E;text-align:right;margin-bottom:2px}
+      .agn-chip{color:#fff;border-radius:5px;padding:1px 5px;font-size:10px;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+      .agn-more{font-size:10px;color:#888780}`;
+      document.head.appendChild(s);
+    }
+
     let miPerfil = { rol: "coordinador", ve_sueldos: false };
     let miEmail = null;
+    let miNombre = null;
     let miUserId = null;
     async function mostrarApp(user) {
       miEmail = user.email;
@@ -5844,6 +6162,7 @@
         sb.from("perfiles").select("nombre, activo, es_direccion").eq("id", user.id).maybeSingle(),
         sb.from("perfiles_sector").select("cargo, permisos").eq("perfil_id", user.id).eq("sector", "planificacion").maybeSingle(),
       ]);
+      miNombre = (perf && perf.nombre) || "";
       const esDir = !!(perf && perf.es_direccion && perf.activo);
       const rol = esDir ? "admin" : (perf && perf.activo && ps ? ps.cargo : null);
       if (!rol) {
@@ -5882,6 +6201,8 @@
       // tab inicial: si no ve sueldos y estaba en personal, mandarlo a proyectos
       if (tab === "personal" && !puedeVerSueldos()) tab = "plani";
       cargar();
+      // Agenda: cartel de pendientes vencidos/de hoy al abrir (1 vez por día, solo Base Neuquén).
+      if (SEDE === "neuquen" && puedeVerNeuquen()) recordatoriosAgendaNqn();
     }
     // ve_sueldos ahora viene resuelto desde perfiles_sector.permisos (o dirección)
     function puedeVerSueldos() { return miPerfil.ve_sueldos === true; }
