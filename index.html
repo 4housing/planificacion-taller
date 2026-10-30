@@ -1110,10 +1110,16 @@
     }
     // Bloque "Sábados habilitados" por proyecto (día hábil real, con recargo en el costo).
     let sabadosModoUI = {}; // recuerda el modo elegido (p.ej. "algunos" sin fechas aún)
+    // Estado de sábados a mostrar: el borrador si hay, si no lo guardado en la base.
+    function sabadosEstado(pr){
+      const d = draftPr[pr.id] && draftPr[pr.id]._sabados;
+      if(d) return { todos: !!d.todos, fechas: (d.fechas||[]).slice().sort() };
+      return { todos: !!pr.sabados_todos, fechas: [...(proyectoSabados[pr.id] || new Set())].sort() };
+    }
     function bloqueSabados(pr){
-      const sabTodos = !!pr.sabados_todos;
-      const sabList = [...(proyectoSabados[pr.id] || new Set())].sort();
-      const modo = sabadosModoUI[pr.id] || (sabTodos ? 'todos' : (sabList.length ? 'algunos' : 'ninguno'));
+      const est = sabadosEstado(pr);
+      const sabList = est.fechas;
+      const modo = sabadosModoUI[pr.id] || (est.todos ? 'todos' : (sabList.length ? 'algunos' : 'ninguno'));
       const rb = (val,lbl)=> '<label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer"><input type="radio" name="sab-'+pr.id+'" '+(modo===val?'checked':'')+' onchange="setSabadosModo(\''+pr.id+'\',\''+val+'\')" style="width:auto;margin:0"> '+lbl+'</label>';
       let h = '<div class="lbl" style="grid-column:1/-1;background:#FBFAF5;border:1px solid #EFE7D6;border-radius:10px;padding:10px 12px">';
       h += '<div style="font-size:12px;font-weight:600;color:#8A6D1F;margin-bottom:7px">Sábados habilitados <span style="font-weight:400;color:#A8A69E">· día hábil real del proyecto, con recargo en el costo</span></div>';
@@ -1127,24 +1133,30 @@
       h += '</div>';
       return h;
     }
-    async function setSabadosModo(id, modo){
-      sabadosModoUI[id] = modo; // recordar la elección (sobre todo "algunos" sin fechas aún)
-      if(modo==='todos'){ const {error}=await sb.from("planificacion_proyectos").update({sabados_todos:true}).eq("id",id); if(error)return setEstado("Error: "+error.message,"err"); }
-      else { const {error}=await sb.from("planificacion_proyectos").update({sabados_todos:false}).eq("id",id); if(error)return setEstado("Error: "+error.message,"err"); if(modo==='ninguno'){ const {error:e2}=await sb.from("planificacion_proyecto_sabados").delete().eq("proyecto_id",id); if(e2)return setEstado("Error: "+e2.message,"err"); } }
-      const pr=proyectos.find(p=>p.id===id); if(pr) pr.sabados_todos=(modo==='todos'); // reflejar sin recargar todo
-      if(modo==='ninguno') proyectoSabados[id]=new Set();
-      renderProyectos();
-      setEstado("✓ Sábados actualizados.","ok");
+    // Los cambios de sábados se acumulan en el BORRADOR (como el resto de la ficha) y
+    // se guardan con "Guardar cambios". _sabDraft crea el borrador desde el estado actual.
+    function _sabDraft(id){
+      if(!draftPr[id]) draftPr[id]={};
+      if(!draftPr[id]._sabados){ const pr=proyectos.find(p=>p.id===id); draftPr[id]._sabados={ todos: !!(pr&&pr.sabados_todos), fechas: [...(proyectoSabados[id]||new Set())] }; }
+      return draftPr[id]._sabados;
     }
-    async function agregarSabado(id){
+    function setSabadosModo(id, modo){
+      sabadosModoUI[id] = modo;
+      const d=_sabDraft(id);
+      if(modo==='todos'){ d.todos=true; }
+      else if(modo==='ninguno'){ d.todos=false; d.fechas=[]; }
+      else { d.todos=false; } // "algunos": conserva las fechas elegidas
+      marcarSucio(id); renderProyectos();
+    }
+    function agregarSabado(id){
       const inp=document.getElementById("sabadd-"+id); const f=inp&&inp.value; if(!f) return setEstado("Elegí una fecha.","err");
       if(new Date(f+"T12:00:00").getDay()!==6) return setEstado("Esa fecha no es un sábado.","err");
-      const {error}=await sb.from("planificacion_proyecto_sabados").insert({proyecto_id:id,fecha:f}); if(error)return setEstado("Error: "+error.message,"err");
-      setEstado("✓ Sábado habilitado.","ok"); cargar();
+      const d=_sabDraft(id); d.todos=false; if(!d.fechas.includes(f)) d.fechas.push(f);
+      sabadosModoUI[id]='algunos'; marcarSucio(id); renderProyectos();
     }
-    async function quitarSabado(id,f){
-      const {error}=await sb.from("planificacion_proyecto_sabados").delete().eq("proyecto_id",id).eq("fecha",f); if(error)return setEstado("Error: "+error.message,"err");
-      setEstado("✓ Sábado quitado.","ok"); cargar();
+    function quitarSabado(id,f){
+      const d=_sabDraft(id); d.fechas=d.fechas.filter(x=>x!==f);
+      sabadosModoUI[id]='algunos'; marcarSucio(id); renderProyectos();
     }
     function li(id,c,l,v){return '<label class="lbl">'+l+'<input value="'+(v==null?'':String(v).replace(/"/g,'&quot;'))+'" onchange="setDraftPr(\''+id+'\',\''+c+'\',this.value)"></label>';}
     function ln(id,c,l,v){return '<label class="lbl">'+l+'<input type="number" value="'+(v||0)+'" onchange="setDraftPr(\''+id+'\',\''+c+'\',Number(this.value))"></label>';}
@@ -1326,22 +1338,34 @@
       proyVista = "operacion";
       cargar();
     }
-    function descartarCambiosPr(){ if(!hayCambiosPr()){ return; } if(!confirm("¿Descartar todos los cambios sin guardar?")) return; draftPr={}; renderProyectos(); setEstado("Cambios descartados.","ok"); }
+    function descartarCambiosPr(){ if(!hayCambiosPr()){ return; } if(!confirm("¿Descartar todos los cambios sin guardar?")) return; draftPr={}; sabadosModoUI={}; renderProyectos(); setEstado("Cambios descartados.","ok"); }
     async function guardarCambiosPr(){
       const ids = Object.keys(draftPr).filter(id => draftPr[id] && Object.keys(draftPr[id]).length);
       if(!ids.length){ setEstado("No hay cambios para guardar.","ok"); return; }
       // Resumen legible de lo que se va a cambiar, para confirmar conscientemente.
       const ETIQ = {nombre:"Nombre",codigo:"Código",descripcion:"Descripción",cant_modulos:"Cant. módulos",tam_modulos:"Tamaño módulos",m2_totales:"m² totales",fecha_inicio:"Fecha de inicio",fecha_montaje:"Fecha de montaje",fecha_entrega:"Fecha de entrega",presupuesto_mo_huella:"Presup. MO La Huella",presupuesto_mo_montaje:"Presup. MO Montaje",planos:"Planos"};
       let resumen = "Vas a guardar estos cambios:\n";
-      ids.forEach(id=>{ const pr=proyectos.find(p=>p.id===id); resumen += "\n• "+(pr?pr.nombre:id)+":\n"; Object.keys(draftPr[id]).forEach(c=>{ resumen += "   - "+(ETIQ[c]||c)+" → "+(draftPr[id][c]===null||draftPr[id][c]===""?"(vacío)":draftPr[id][c])+"\n"; }); });
+      ids.forEach(id=>{ const pr=proyectos.find(p=>p.id===id); resumen += "\n• "+(pr?pr.nombre:id)+":\n"; Object.keys(draftPr[id]).forEach(c=>{ if(c==='_sabados'){ const s=draftPr[id]._sabados; resumen += "   - Sábados → "+(s.todos?"Todos":(s.fechas&&s.fechas.length? s.fechas.length+" fecha(s)":"Ninguno"))+"\n"; return; } resumen += "   - "+(ETIQ[c]||c)+" → "+(draftPr[id][c]===null||draftPr[id][c]===""?"(vacío)":draftPr[id][c])+"\n"; }); });
       resumen += "\n¿Confirmás guardar estos cambios?";
       if(!confirm(resumen)) return;
       let guardados=0;
       for(const id of ids){
-        const { error } = await sb.from("planificacion_proyectos").update(draftPr[id]).eq("id", id);
-        if(error){ setEstado("Error al guardar "+id+": "+error.message,"err"); continue; }
-        const pr=proyectos.find(p=>p.id===id); if(pr) Object.assign(pr, draftPr[id]);
-        delete draftPr[id]; guardados++;
+        const draft = Object.assign({}, draftPr[id]);
+        const sab = draft._sabados; delete draft._sabados;
+        if(sab) draft.sabados_todos = !!sab.todos; // la columna del proyecto
+        if(Object.keys(draft).length){
+          const { error } = await sb.from("planificacion_proyectos").update(draft).eq("id", id);
+          if(error){ setEstado("Error al guardar "+id+": "+error.message,"err"); continue; }
+        }
+        if(sab){ // reconciliar los sábados puntuales (tabla aparte)
+          const { error: eDel } = await sb.from("planificacion_proyecto_sabados").delete().eq("proyecto_id", id);
+          if(eDel){ setEstado("Error al guardar sábados: "+eDel.message,"err"); continue; }
+          const fechas = sab.todos ? [] : (sab.fechas||[]);
+          if(fechas.length){ const { error: eIns } = await sb.from("planificacion_proyecto_sabados").insert(fechas.map(f=>({proyecto_id:id,fecha:f}))); if(eIns){ setEstado("Error al guardar sábados: "+eIns.message,"err"); continue; } }
+          proyectoSabados[id] = new Set(fechas);
+        }
+        const pr=proyectos.find(p=>p.id===id); if(pr) Object.assign(pr, draft);
+        delete draftPr[id]; delete sabadosModoUI[id]; guardados++;
       }
       renderProyectos();
       setEstado("\u2713 "+guardados+" proyecto(s) guardado(s).","ok");
