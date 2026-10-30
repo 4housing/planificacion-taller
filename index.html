@@ -2226,7 +2226,7 @@
       });
       supervisiones.forEach(s=>{
         if(s.supervisor_id!==personaId) return;
-        const dias=diasHabiles(s.fecha_desde,s.fecha_hasta);
+        const dias=diasHabiles(s.fecha_desde,s.fecha_hasta,proysDeSup(s));
         const choca=dias.filter(d=> d>=desde && d<=hasta);
         if(choca.length){ const ids=(s.proyectos||"").split(",").map(x=>x.trim()).filter(Boolean); hit.push({ estacion: SUP_LABEL, proyecto: ids.map(nombreProy).join(", "), dias: choca }); }
       });
@@ -2308,12 +2308,16 @@
     // Sábados habilitados por proyecto (La Huella): mapa proyecto_id -> Set(fecha) + flag proyectos.sabados_todos.
     let proyectoSabados = {};
     function esSabadoHabil(proyId, fecha){
+      // Supervisión: abarca varios proyectos → el sábado es hábil si alguno lo tiene habilitado.
+      if(Array.isArray(proyId)) return proyId.some(id=>esSabadoHabil(id, fecha));
       if(!proyId) return false;
       const p = proyectos.find(x=>x.id===proyId);
       if(p && p.sabados_todos) return true;
       const s = proyectoSabados[proyId];
       return !!(s && s.has(fecha));
     }
+    // Proyectos (ids) de una asignación de supervisión.
+    function proysDeSup(s){ return (s.proyectos||"").split(",").map(x=>x.trim()).filter(Boolean); }
     // diasHabiles: excluye domingos/sábados/feriados; si se pasa proyId, INCLUYE los
     // sábados habilitados para ese proyecto (día hábil real, con costo de recargo aparte).
     // Sin proyId → comportamiento histórico idéntico.
@@ -2322,7 +2326,8 @@
     // Diferencia en días corridos entre dos fechas ISO (b - a). Positivo = b es posterior.
     function diffDiasCorridos(a,b){ if(!a||!b) return 0; const da=new Date(a+"T12:00:00"), db=new Date(b+"T12:00:00"); return Math.round((db-da)/86400000); }
     // Suma N días HÁBILES a una fecha ISO (saltea fines de semana y feriados). N puede ser negativo.
-    function sumarDiasHabiles(iso, n){ if(!iso||!n) return iso; let d=new Date(iso+"T12:00:00"); let restantes=Math.abs(n); const paso=n>0?1:-1; while(restantes>0){ d=new Date(d.getTime()+paso*86400000); const w=d.getDay(); const f=fechaStr(d); if(w!==0&&w!==6&&!esFeriado(f)) restantes--; } return fechaStr(d); }
+    // Con proyId cuenta también los sábados habilitados de ese proyecto (igual que diasHabiles).
+    function sumarDiasHabiles(iso, n, proyId){ if(!iso||!n) return iso; let d=new Date(iso+"T12:00:00"); let restantes=Math.abs(n); const paso=n>0?1:-1; while(restantes>0){ d=new Date(d.getTime()+paso*86400000); const w=d.getDay(); const f=fechaStr(d); if((w!==0&&w!==6&&!esFeriado(f))||(w===6&&esSabadoHabil(proyId,f))) restantes--; } return fechaStr(d); }
     // hoy en ISO (zona AR, mediodía para evitar corrimiento)
     function hoyISO(){ return fechaStr(new Date()); }
     // --- Corte de "real" hasta AYER ---
@@ -2446,7 +2451,7 @@
         const tieneProy = (s.proyectos||"").split(",").map(x=>x.trim()).filter(Boolean).length > 0;
         if (!tieneProy) return;
         const hrs = (s.horas != null ? s.horas : 8);
-        diasHabiles(s.fecha_desde, s.fecha_hasta).forEach(d => {
+        diasHabiles(s.fecha_desde, s.fecha_hasta, proysDeSup(s)).forEach(d => {
           const k = s.supervisor_id+"|"+d;
           cargaSup[k] = (cargaSup[k]||0) + hrs;
         });
@@ -3078,7 +3083,7 @@
       }
       supsFiltradas.forEach(s => {
         const proySel = (s.proyectos||"").split(",").map(x=>x.trim()).filter(Boolean);
-        const dias = diasHabiles(s.fecha_desde, s.fecha_hasta);
+        const dias = diasHabiles(s.fecha_desde, s.fecha_hasta, proysDeSup(s));
         const diasNoDispo = dias.filter(d=>noDispoEn(s.supervisor_id,d));
         h += '<div style="border:1px solid #E6E4DC;border-radius:12px;padding:12px;margin-top:10px;background:#fff">'
           + '<div class="pl-row" style="align-items:center"><select onchange="editarSup(\''+s.id+'\',\'supervisor_id\',this.value)" style="min-width:180px">'+sups.map(p=>'<option value="'+p.id+'" '+(p.id===s.supervisor_id?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select>'
@@ -3168,7 +3173,7 @@
         const ids = (s.proyectos||"").split(",").map(x=>x.trim()).filter(Boolean);
         if (!ids.length) return; // sin proyecto no genera (validado más arriba)
         const nombres = ids.map(nombreProy).join(", ");
-        const dias = diasHabiles(s.fecha_desde, s.fecha_hasta).filter(d => d >= hoy);
+        const dias = diasHabiles(s.fecha_desde, s.fecha_hasta, proysDeSup(s)).filter(d => d >= hoy);
         const hrs = (s.horas != null ? s.horas : 8);
         dias.forEach(fecha => {
           if (noDispoEn(s.supervisor_id, fecha)) return;
@@ -3223,7 +3228,7 @@
       supervisiones.forEach(s => {
         const ids = (s.proyectos||"").split(",").map(x=>x.trim()).filter(Boolean);
         if (!ids.length) return;
-        const dias = diasHabiles(s.fecha_desde, s.fecha_hasta);
+        const dias = diasHabiles(s.fecha_desde, s.fecha_hasta, proysDeSup(s));
         if (!dias.includes(fecha)) return;
         if (noDispoEn(s.supervisor_id, fecha)) return;
         const clave = s.supervisor_id + "|" + SUP_MARK + "|" + ids[0];
@@ -3915,7 +3920,7 @@
       let ok=0;
       for(let i=cand.length-1;i>=0;i--){
         const x=cand[i];
-        const nueva = sumarDiasHabiles(x.fecha, 1);
+        const nueva = sumarDiasHabiles(x.fecha, 1, x.proyecto_id);
         const { error } = await sb.from("planificacion_detalle_diario").update({ fecha: nueva }).eq("id", x.id);
         if(error){ setEstado("Error al correr un día: "+error.message,"err"); continue; }
         x.fecha = nueva; ok++;
@@ -4051,7 +4056,7 @@
     function seguirManana(id){
       const f = detalle.find(x=>x.id===id);
       if(!f){ setEstado("No encontré la fila.","err"); return; }
-      const manana = sumarDiasHabiles(hoyISO(), 1);
+      const manana = sumarDiasHabiles(hoyISO(), 1, f.proyecto_id);
       abrirDiaExtra({
         fecha: manana,
         proyecto_id: f.proyecto_id,
@@ -4924,7 +4929,7 @@
           baseInf.contenido.supervisiones.forEach(s=>{ horasBase[s.supervisor_id]=(s.horas!=null?s.horas:8); });
         }
         supVig.forEach(s=>{
-          const nd = diasHabiles(s.fecha_desde, s.fecha_hasta).length;
+          const nd = diasHabiles(s.fecha_desde, s.fecha_hasta, proysDeSup(s)).length;
           if(!nd) return;
           const hrs = (horasBase[s.supervisor_id]!=null) ? horasBase[s.supervisor_id] : (s.horas!=null?s.horas:8);
           const ch = costoHora(s.supervisor_id, s.fecha_desde || hoyISO());
