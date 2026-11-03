@@ -256,7 +256,7 @@
       tab = SEDES[s].tabDefault;
       // Resetear filtros que guardan ids específicos de una sede, para no arrastrarlos a la otra.
       ganttProy = ""; histoProy = ""; impactoProy = ""; planiProy = ""; detalleDesde = null; detalleVerTodo = false;
-      parteFecha = null; parteProy = ""; parteEst = ""; partePersona = "";
+      parteFecha = null; parteProy = ""; parteEst = ""; partePersona = ""; parteTipo = "";
       trailerEstadoFiltro = ""; mantTrailerFiltro = ""; mantDesdeFiltro = "";
       renderTabs();
       cargar();
@@ -290,7 +290,7 @@
     let planiResaltar = null;  // {persona, fecha, bloques:[ids]} para resaltar tras saltar a un conflicto
     let impactoProy = "";      // filtro de proyecto del panel de impacto ("" = todos)
     let ganttProy = "", histoProy = "";  // filtros de Gantt e Histograma (compartidos; se resetean al cambiar de sede)
-    let parteFecha = null, parteProy = "", parteEst = "", partePersona = "";  // filtros de la pestaña Parte diario (antes no estaban declarados → renderParte tiraba ReferenceError al entrar)
+    let parteFecha = null, parteProy = "", parteEst = "", partePersona = "", parteTipo = "";  // filtros de la pestaña Parte diario (antes no estaban declarados → renderParte tiraba ReferenceError al entrar). parteTipo: "" todos / "directo" solo MOD / "contratista" solo contratistas
     function setImpactoProy(pid){ impactoProy = (impactoProy===pid ? "" : pid); renderDetalle(); }
     // Desde el desglose por estación: hacer scroll a la primera fila de esa estación en la tabla del detalle.
     function detScrollAEstacion(est){
@@ -4665,6 +4665,10 @@
       if(parteProy) rows=rows.filter(f=>f.proyecto_id===parteProy);
       if(parteEst) rows=rows.filter(f=>f.estacion_real===parteEst);
       if(partePersona) rows=rows.filter(f=>f.persona_real===partePersona);
+      // Filtro por tipo de personal: para mandar a cada grupo solo lo suyo (MOD = directos / contratistas).
+      const tipoDeP = (pid)=>{ const pp=personas.find(x=>x.id===pid); return (pp&&pp.tipo==="Contratista") ? "contratista" : "directo"; };
+      if(parteTipo) rows=rows.filter(f=> tipoDeP(f.persona_real)===parteTipo);
+      const tipoNom = parteTipo==='directo' ? 'Solo mano de obra directa' : (parteTipo==='contratista' ? 'Solo contratistas' : '');
       const proyNom = parteProy ? nombreProy(parteProy) : "Todos los proyectos";
       const modTxt = (f)=>{ const m=(f.modulos_real||"").trim(); return m?" ["+m+"]":""; };
       // No disponibles del día (día libre / licencia / vacaciones / parte médico). Estas personas
@@ -4678,21 +4682,23 @@
         ? dispo.filter(d=> d.persona_id && d.desde && d.hasta && fSel && fSel>=d.desde && fSel<=d.hasta && huellaSet.has(d.persona_id) && !yaEnRows.has(d.persona_id))
         : [];
       if(partePersona) dispoRows = dispoRows.filter(d=> d.persona_id===partePersona);
+      if(parteTipo) dispoRows = dispoRows.filter(d=> tipoDeP(d.persona_id)===parteTipo);
       const vistosD = new Set();
       dispoRows = dispoRows.filter(d=> vistosD.has(d.persona_id)?false:(vistosD.add(d.persona_id),true));
       dispoRows.sort((a,b)=> nombrePersona(a.persona_id).localeCompare(nombrePersona(b.persona_id)));
       const lineasTareas = rows.map(f=>{const pp=personas.find(x=>x.id===f.persona_real);const ec=pp&&pp.tipo==="Contratista";const cx=ec?cantContratistaDeFila(f):null;return "• "+nombrePersona(f.persona_real)+(ec?" (contratista"+(cx?" · "+cx+" pers.":"")+")":"")+" → "+nombreProy(f.proyecto_id)+" · "+nombreEstacion(f.estacion_real)+modTxt(f)+": "+f.subtarea_real+(f.horas_extra>0?" (+"+f.horas_extra+"h extra)":"");});
-      let texto = "*Parte diario "+(fSel?dmy(fSel):"")+"*\n"+proyNom+"\n\n"+(lineasTareas.length?lineasTareas.join("\n"):"Sin asignaciones.");
+      let texto = "*Parte diario "+(fSel?dmy(fSel):"")+"*\n"+proyNom+(tipoNom?" — "+tipoNom:"")+"\n\n"+(lineasTareas.length?lineasTareas.join("\n"):"Sin asignaciones.");
       if(dispoRows.length) texto += "\n\n*No disponibles:*\n"+dispoRows.map(d=> "• "+nombrePersona(d.persona_id)+" — "+d.tipo).join("\n");
       let h='<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">';
       h+='<label style="font-size:11.5px;color:#888780">Fecha<br><select onchange="setParte(\'fecha\',this.value)" style="margin-top:3px">'+(fechas.length?fechas.map(d=>'<option value="'+d+'" '+(d===fSel?'selected':'')+'>'+dmy(d)+'</option>').join(''):'<option>—</option>')+'</select></label>';
       h+='<label style="font-size:11.5px;color:#888780">Proyecto<br><select onchange="setParte(\'proy\',this.value)" style="margin-top:3px"><option value="">Todos</option>'+proyectosOperativos().map(p=>'<option value="'+p.id+'" '+(p.id===parteProy?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></label>';
       h+='<label style="font-size:11.5px;color:#888780">Estación<br><select onchange="setParte(\'est\',this.value)" style="margin-top:3px"><option value="">Todas</option>'+STKEYS.map(k=>'<option value="'+k+'" '+(k===parteEst?'selected':'')+'>'+STATIONS[k].label+'</option>').join('')+'</select></label>';
       h+='<label style="font-size:11.5px;color:#888780">Persona<br><select onchange="setParte(\'pers\',this.value)" style="margin-top:3px"><option value="">Todas</option>'+personasHuella().map(p=>'<option value="'+p.id+'" '+(p.id===partePersona?'selected':'')+'>'+p.nombre+'</option>').join('')+'</select></label>';
+      h+='<label style="font-size:11.5px;color:#888780">Mostrar<br><select onchange="setParte(\'tipo\',this.value)" style="margin-top:3px"><option value="">Todos</option><option value="directo" '+(parteTipo==='directo'?'selected':'')+'>Solo directos (MOD)</option><option value="contratista" '+(parteTipo==='contratista'?'selected':'')+'>Solo contratistas</option></select></label>';
       h+='<button class="btn btn-wsp" onclick="copiarParte()">Copiar para WhatsApp</button>';
       h+=botonesExport("parteBox","parte_diario");
       h+='</div>';
-      h+='<div id="parteBox" style="border:1px solid #E6E4DC;border-radius:12px;padding:18px 20px;max-width:480px"><div style="font-size:16px;font-weight:600">Parte diario '+(fSel?dmy(fSel):"")+'</div><div style="font-size:12.5px;color:#888780;margin-bottom:6px">'+proyNom+(parteEst?' · '+STATIONS[parteEst].label:'')+(partePersona?' · '+nombrePersona(partePersona):'')+'</div><div style="border-top:1px solid #F1EFE8;margin-top:6px;padding-top:6px">';
+      h+='<div id="parteBox" style="border:1px solid #E6E4DC;border-radius:12px;padding:18px 20px;max-width:480px"><div style="font-size:16px;font-weight:600">Parte diario '+(fSel?dmy(fSel):"")+'</div><div style="font-size:12.5px;color:#888780;margin-bottom:6px">'+proyNom+(tipoNom?' · '+tipoNom:'')+(parteEst?' · '+STATIONS[parteEst].label:'')+(partePersona?' · '+nombrePersona(partePersona):'')+'</div><div style="border-top:1px solid #F1EFE8;margin-top:6px;padding-top:6px">';
       if(!rows.length && !dispoRows.length) h+='<div style="font-size:13px;color:#A8A69E;padding:8px 0">'+(detalle.length?'Sin asignaciones para este filtro.':'Generá el detalle diario primero.')+'</div>';
       rows.forEach(f=>{ const mm=(f.modulos_real||"").trim(); const pp=personas.find(x=>x.id===f.persona_real); const esContr=pp&&pp.tipo==="Contratista"; const cxH=esContr?cantContratistaDeFila(f):null; h+='<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid #F1EFE8;font-size:13px"><span style="font-weight:600;min-width:140px">'+nombrePersona(f.persona_real)+(esContr?' <span style="background:#EFE7FB;color:#6B3FA0;padding:1px 5px;border-radius:5px;font-size:9.5px;font-weight:500">contratista'+(cxH?' · '+cxH+' pers.':'')+'</span>':'')+'</span><span><span style="background:#EDE9F6;color:#3C3489;padding:2px 6px;border-radius:6px;font-size:10.5px;font-weight:600">'+nombreProy(f.proyecto_id)+'</span> <span style="background:'+estBg(f.estacion_real)+';color:'+estColor(f.estacion_real)+';padding:2px 6px;border-radius:6px;font-size:10.5px">'+nombreEstacion(f.estacion_real)+'</span>'+(mm?' <span style="background:#E6F1FB;color:#185FA5;padding:2px 6px;border-radius:6px;font-size:10.5px">'+mm+'</span>':'')+' <span style="color:#888780">'+f.subtarea_real+'</span>'+(f.horas_extra>0?' <span style="color:#BA7517;font-size:11px">+'+f.horas_extra+'h</span>':'')+'</span></div>'; });
       if(dispoRows.length){
@@ -4704,7 +4710,7 @@
       h+='<textarea id="parteTexto" style="position:absolute;left:-9999px">'+texto+'</textarea>';
       contenido.innerHTML=h;
     }
-    function setParte(campo,val){ if(campo==='fecha')parteFecha=val; else if(campo==='proy')parteProy=val; else if(campo==='est')parteEst=val; else if(campo==='pers')partePersona=val; renderParte(); }
+    function setParte(campo,val){ if(campo==='fecha')parteFecha=val; else if(campo==='proy')parteProy=val; else if(campo==='est')parteEst=val; else if(campo==='pers')partePersona=val; else if(campo==='tipo')parteTipo=val; renderParte(); }
     function copiarParte(){ const t=document.getElementById("parteTexto"); t.select(); try{ navigator.clipboard.writeText(t.value); setEstado("\u2713 Parte copiado. Pegalo en WhatsApp.","ok"); }catch(e){ document.execCommand("copy"); setEstado("\u2713 Parte copiado.","ok"); } }
 
     /* ---- INFORME DE CIERRE ---- */
