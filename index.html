@@ -3695,6 +3695,9 @@
     // Una fila por persona y día del mes, con las columnas del modelo (Legajo … Ausente) para pegar en el Excel.
     // La 16ª columna ("Control") es solo para revisar acá: NO se copia al portapapeles.
     // Equivalencias app → listas del Excel (hoja Aux): ver datosTarea / datosProyecto / DATOS_AUS.
+    // Legajos que salen siempre en el export; los días hábiles sin tarea ni licencia van como "Supervisión" (rol de seguimiento).
+    const DATOS_SUPERVISOR_LEGAJOS = ["110"];
+    const DATOS_SUP_TAREA = "Seguimiento de planificación y organización de recursos";
     const DATOS_UBIC = "Huella 610";          // por ahora todo es La Huella (CIR / destino de montaje: pendiente)
     const DATOS_PROD = "Producción ";         // con espacio final: así figura en la lista Aux del Excel
     const DATOS_DIAS = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
@@ -3747,15 +3750,22 @@
       return { tareas:"REVISAR: "+lbl, pv:P, nota:"REVISAR" };
     }
     // Proyecto "interno" (sin código, o la propia Huella): en el Excel va como categoría, no como proyecto.
-    function datosEsInterno(pr){ return !pr || !pr.codigo || /^\s*la huella\s*$/i.test(pr.nombre||""); }
+    function datosCodigo(pr){ return pr ? String(pr.codigo==null?"":pr.codigo).trim() : ""; }
+    // "La Huella" y las "Estructura ..." (centros de costo internos) salen como categoría Mantenimiento, no como proyecto.
+    function datosEsMantenimiento(pr){ return !!pr && (/^\s*la huella\s*$/i.test(pr.nombre||"") || /^\s*estructura\b/i.test(pr.nombre||"")); }
+    function datosEsInterno(pr){ return !pr || !datosCodigo(pr) || datosEsMantenimiento(pr); }
     function datosProyecto(pr, est){
       if (datosEsInterno(pr)) {
         const cat = { mantenimiento:"Mantenimiento", montaje:"Mantenimiento", maquinista:"Maquinista", rental:"Modulos Alquiler" }[est];
         if (est === SUP_MARK) return { v:"Supervisión" };
         if (cat) return { v:cat };
+        if (datosEsMantenimiento(pr)) return { v:"Mantenimiento" };
         return { v: pr ? String(pr.nombre||"").toUpperCase() : "REVISAR: sin proyecto", nota: pr ? "proyecto sin código" : "REVISAR" };
       }
-      return { v: (String(pr.codigo).trim()+" "+String(pr.nombre||"").trim()).toUpperCase() };
+      const cod = datosCodigo(pr), nom = String(pr.nombre||"").trim();
+      // si el nombre ya empieza con el código no se repite (ej.: "OE-V-4432-03 · Oficinas...")
+      const etiqueta = nom.toUpperCase().indexOf(cod.toUpperCase()) === 0 ? nom : (cod+" "+nom);
+      return { v: etiqueta.toUpperCase() };
     }
 
     // Devuelve { filas:[[16 columnas]…], resumen } para el mes 'YYYY-MM'.
@@ -3767,9 +3777,14 @@
       const periodo = Y*100+M;
       const enMes = detalle.filter(f => f.fecha >= ini && f.fecha <= fin);
       // Quiénes: directos de La Huella con detalle o no-disponibilidad dentro del mes (evita arrastrar gente que ya no está).
-      const gente = personasHuella().filter(p => p.tipo === "Directo" && (
+      const tieneLegajo = p => String(p.legajo==null?"":p.legajo).trim() !== "";
+      const esSup = p => DATOS_SUPERVISOR_LEGAJOS.indexOf(String(p.legajo==null?"":p.legajo).trim()) >= 0;
+      const candidatos = personasHuella().filter(p => p.tipo === "Directo" && (
           enMes.some(f => f.persona_real === p.id) || dispo.some(n => n.persona_id === p.id && n.desde <= fin && n.hasta >= ini)
-        )).sort((a,b)=> (parseInt(a.legajo)||9999)-(parseInt(b.legajo)||9999));
+        ));
+      const sinLegajo = candidatos.filter(p => !tieneLegajo(p)).map(p => p.nombre);   // se dejan afuera: no se pueden pegar sin legajo
+      const forzados = personas.filter(p => tieneLegajo(p) && esSup(p) && !candidatos.some(c => c.id === p.id));
+      const gente = candidatos.filter(tieneLegajo).concat(forzados).sort((a,b)=> (parseInt(a.legajo)||9999)-(parseInt(b.legajo)||9999));
       const porPD = {};
       enMes.forEach(f => { (porPD[f.persona_real+"|"+f.fecha] = porPD[f.persona_real+"|"+f.fecha] || []).push(f); });
       const filas = []; const rev = new Set(); let sinPlan = 0, multi = 0;
@@ -3792,6 +3807,8 @@
             const pr0 = proyectos.find(x => x.id === f0.proyecto_id);
             const interno0 = datosEsInterno(pr0);
             const pj = datosProyecto(pr0, est0), tk = datosTarea(est0, sub0, interno0);
+            if (pj.v === "Mantenimiento") tk.pv = "Mantenimiento";                       // centros internos de mantenimiento
+            if (pr0 && /post\s*venta/i.test(pr0.nombre||"")) tk.pv = "Posventa";        // proyectos de posventa
             [pj.nota, tk.nota].forEach(n => { if (n) notas.push(n); });
             if (ord.length > 1) { notas.push("varias tareas el mismo día"); multi++; }
             const desc = ord.map(f => {
@@ -3815,13 +3832,16 @@
             else if (n) { rev.add("tipo "+n.tipo); ausRow("Ausente", "Licencia", "REVISAR: "+n.tipo, n.tipo, "REVISAR: tipo de no disponibilidad sin equivalente"); }
             else {
               const lab = (dow >= 1 && dow <= 5);
-              if (lab) sinPlan++;
-              filas.push([...base, "", "", "", "", "", "", "", "", "", "", lab ? "SIN PLANIFICAR" : ""]);
+              if (lab && esSup(p)) filas.push([...base, DATOS_UBIC, "Supervisión", "", DATOS_PROD, "", DATOS_SUP_TAREA, DATOS_SUP_TAREA+".", "", "", "", "supervisor por defecto"]);
+              else {
+                if (lab) sinPlan++;
+                filas.push([...base, "", "", "", "", "", "", "", "", "", "", lab ? "SIN PLANIFICAR" : ""]);
+              }
             }
           }
         });
       }
-      return { filas, resumen:{ personas:gente.length, dias:ult, sinPlan, multi, revisar:[...rev] } };
+      return { filas, resumen:{ personas:gente.length, dias:ult, sinPlan, multi, sinLegajo, revisar:[...rev] } };
     }
     function datosCelda(v){ return v==null ? "" : String(v).replace(/[\t\r\n]+/g," "); }
     function datosCopiarViejo(texto, ok){
@@ -3863,6 +3883,7 @@
         res = '<div style="font-size:12px;color:#5F5E5A;margin-top:8px">'+r.filas.length+' fila(s) · '+R.personas+' persona(s) × '+R.dias+' días'
           + (R.sinPlan ? ' · <b style="color:#A32D2D">'+R.sinPlan+' día(s) hábil(es) SIN PLANIFICAR</b> (quedan vacíos)' : ' · sin días hábiles vacíos')
           + (R.multi ? ' · '+R.multi+' día(s) con varias tareas' : '')
+          + (R.sinLegajo && R.sinLegajo.length ? ' · sin legajo (no incluidas): '+R.sinLegajo.map(escT).join(', ') : '')
           + (R.revisar.length ? '<br><b style="color:#A32D2D">REVISAR:</b> '+R.revisar.map(escT).join(', ') : '')
           + '</div>'
           + '<details ontoggle="datosPreview(this)" style="margin-top:6px"><summary style="font-size:12px;color:#185FA5;cursor:pointer">Ver vista previa</summary><div class="datos-prev" style="max-height:340px;overflow:auto;margin-top:6px"></div></details>';
