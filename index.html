@@ -3691,6 +3691,192 @@
       abrirDiaExtraNqn({ fecha: manana, trailer_id: f.trailer_id, persona: f.persona_real, tarea: f.estacion_real, subtarea: f.subtarea_real, origenFilaId: f.id });
     }
 
+    // ====== EXPORT "FORMATO DATOS" (planilla de M.O.) ======
+    // Una fila por persona y día del mes, con las columnas del modelo (Legajo … Ausente) para pegar en el Excel.
+    // La 16ª columna ("Control") es solo para revisar acá: NO se copia al portapapeles.
+    // Equivalencias app → listas del Excel (hoja Aux): ver datosTarea / datosProyecto / DATOS_AUS.
+    const DATOS_UBIC = "Huella 610";          // por ahora todo es La Huella (CIR / destino de montaje: pendiente)
+    const DATOS_PROD = "Producción ";         // con espacio final: así figura en la lista Aux del Excel
+    const DATOS_DIAS = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
+    const DATOS_CAB = ["Legajo","Empleado","Periodo","Fecha","Dia","Ubicación","Proyecto","Lote","Posventa/Montaje","Modulo","TAREAS","Desc Tarea","Otros","Trámite","Ausente","Control (no pegar)"];
+    // tipo de No disponibilidad (app) → TAREAS y descripción del Excel
+    const DATOS_AUS = {
+      "Vacaciones":   { tareas:"Vacaciones",           desc:"Vacaciones" },
+      "ART":          { tareas:"Lic. ART",             desc:"Licencia ART" },
+      "Parte médico": { tareas:"Lic. Enfermedad",      desc:"Licencia medica" },
+      "Licencia":     { tareas:"Ausencia Justificada", desc:"Ausencia justificada" }
+    };
+    let datosMes = null;
+
+    // Estación de la app (+ subtarea) → { tareas, pv: Posventa/Montaje, nota }.
+    // nota: "propuesto" = equivalencia que NO apareció en el modelo de octubre (confirmar); "REVISAR" = sin equivalente.
+    function datosTarea(est, sub, interno){
+      const s = String(sub||"");
+      const P = DATOS_PROD;
+      if (est === SUP_MARK) return { tareas:"Supervisor de proyecto", pv:P };
+      switch (est) {
+        case "corte_hierros":    return { tareas:"Tareas de Herrería", pv:P };
+        case "taller_herreria":  return { tareas:/puerta/i.test(s) ? "Armado de puertas" : "Tareas de Herrería", pv:P };
+        case "taller_carpinteria":
+          if (/cielorras/i.test(s)) return { tareas:"Procesamiento y armado de placas de cielorras ", pv:P };
+          if (/abertura/i.test(s))  return { tareas:"Fabricación de aberturas", pv:P };
+          if (/puerta/i.test(s))    return { tareas:"Armado de puertas", pv:P, nota:"propuesto" };
+          return { tareas:"REVISAR: carpintería · "+s, pv:P, nota:"REVISAR" };
+        case "extras_herreria":  return { tareas:"Tareas de Extras de Herrería", pv:P };
+        case "ensamble":         return { tareas:"Ensamble de modulos", pv:P };
+        case "terminaciones":    return { tareas:"Tareas de Terminaciones", pv:P };
+        case "revestimiento":    return { tareas:"Tareas de Revestimiento", pv:P };
+        case "maquinista":       return { tareas:"Maquinista", pv:P };
+        case "rental":           return { tareas:"Tareas de Mantenimiento de Bs de Alquiler", pv:"Mantenimiento Alquileres" };
+        case "mantenimiento":    return { tareas:/limpieza|pasto|residuo/i.test(s) ? "Tareas de Limpieza" : "Mantenimiento", pv:"Mantenimiento" };
+        case "montaje":          return { tareas:"Tareas de Montaje", pv: interno ? "Mantenimiento" : "Montaje", nota: interno ? "" : "propuesto" };
+        // --- no aparecieron en el modelo de octubre: propuestas tomadas de la lista Aux ---
+        case "bastidor_piso":    return { tareas:"Fabricación de bastidores de piso", pv:P, nota:"propuesto" };
+        case "bastidor_techo":   return { tareas:"Fabricación de bastidores de techo", pv:P, nota:"propuesto" };
+        case "aberturas":        return { tareas:"Colocación de aberturas", pv:P, nota:"propuesto" };
+        case "pintura":          return { tareas:"Tareas de Pintura", pv:P, nota:"propuesto" };
+        case "postventa":        return { tareas:"Tareas de Posventa", pv:"Posventa", nota:"propuesto" };
+        case "impermeabilizacion": return { tareas:"Impermeabilización de cubierta", pv:P, nota:"propuesto" };
+        case "pre_revest":       return { tareas:"Tareas de Pre Montaje", pv:P, nota:"propuesto" };
+        case "revest_humedo":    return { tareas:"Tareas de Revestimiento", pv:P, nota:"propuesto" };
+        case "electrica":        return { tareas:"Mecanizados electricos", pv:P, nota:"propuesto" };
+        case "sanitaria":        return { tareas:"Tareas de instalación sanitaria", pv:P, nota:"propuesto" };
+      }
+      // arenado, piso_radiante, termomecanica y cualquier estación nueva: sin equivalente en Aux
+      const lbl = (STATIONS[est] && STATIONS[est].label) || est || "(sin estación)";
+      return { tareas:"REVISAR: "+lbl, pv:P, nota:"REVISAR" };
+    }
+    // Proyecto "interno" (sin código, o la propia Huella): en el Excel va como categoría, no como proyecto.
+    function datosEsInterno(pr){ return !pr || !pr.codigo || /^\s*la huella\s*$/i.test(pr.nombre||""); }
+    function datosProyecto(pr, est){
+      if (datosEsInterno(pr)) {
+        const cat = { mantenimiento:"Mantenimiento", montaje:"Mantenimiento", maquinista:"Maquinista", rental:"Modulos Alquiler" }[est];
+        if (est === SUP_MARK) return { v:"Supervisión" };
+        if (cat) return { v:cat };
+        return { v: pr ? String(pr.nombre||"").toUpperCase() : "REVISAR: sin proyecto", nota: pr ? "proyecto sin código" : "REVISAR" };
+      }
+      return { v: (String(pr.codigo).trim()+" "+String(pr.nombre||"").trim()).toUpperCase() };
+    }
+
+    // Devuelve { filas:[[16 columnas]…], resumen } para el mes 'YYYY-MM'.
+    function datosFilasMes(mes){
+      if (!/^\d{4}-\d{2}$/.test(mes||"")) return null;
+      const [Y, M] = mes.split("-").map(Number);
+      const ult = new Date(Y, M, 0).getDate();
+      const ini = mes+"-01", fin = mes+"-"+String(ult).padStart(2,"0");
+      const periodo = Y*100+M;
+      const enMes = detalle.filter(f => f.fecha >= ini && f.fecha <= fin);
+      // Quiénes: directos de La Huella con detalle o no-disponibilidad dentro del mes (evita arrastrar gente que ya no está).
+      const gente = personasHuella().filter(p => p.tipo === "Directo" && (
+          enMes.some(f => f.persona_real === p.id) || dispo.some(n => n.persona_id === p.id && n.desde <= fin && n.hasta >= ini)
+        )).sort((a,b)=> (parseInt(a.legajo)||9999)-(parseInt(b.legajo)||9999));
+      const porPD = {};
+      enMes.forEach(f => { (porPD[f.persona_real+"|"+f.fecha] = porPD[f.persona_real+"|"+f.fecha] || []).push(f); });
+      const filas = []; const rev = new Set(); let sinPlan = 0, multi = 0;
+      for (let d = 1; d <= ult; d++) {
+        const fecha = mes+"-"+String(d).padStart(2,"0");
+        const dow = new Date(fecha+"T12:00:00").getDay();
+        const fer = feriados.find(h => h.fecha === fecha && !h.se_trabaja);
+        gente.forEach(p => {
+          const base = [Number(p.legajo)||p.legajo, p.nombre, periodo, fecha, DATOS_DIAS[dow]];
+          const notas = [];
+          const todas = porPD[p.id+"|"+fecha] || [];
+          const trab = todas.filter(f => !f.ausente);
+          const ausRow = (proy, pv, tareas, desc, nota) => { if(nota) notas.push(nota); filas.push([...base, "N/A", proy, "", pv, "", tareas, desc, "", "", "", notas.join(" · ")]); };
+          if (trab.length) {
+            // la estación va primero; la supervisión (corre en paralelo) se suma a la descripción
+            const ord = trab.slice().sort((a,b)=> (a.estacion_real===SUP_MARK ? 1 : 0) - (b.estacion_real===SUP_MARK ? 1 : 0));
+            const f0 = ord[0];
+            const est0 = f0.estacion_real || f0.estacion_plan || "";
+            const sub0 = f0.subtarea_real || f0.subtarea_plan || "";
+            const pr0 = proyectos.find(x => x.id === f0.proyecto_id);
+            const interno0 = datosEsInterno(pr0);
+            const pj = datosProyecto(pr0, est0), tk = datosTarea(est0, sub0, interno0);
+            [pj.nota, tk.nota].forEach(n => { if (n) notas.push(n); });
+            if (ord.length > 1) { notas.push("varias tareas el mismo día"); multi++; }
+            const desc = ord.map(f => {
+              const pr = proyectos.find(x => x.id === f.proyecto_id);
+              const h = (Number(f.horas_normales)||0) + (Number(f.horas_extra)||0);
+              return (pr ? pr.nombre : "(sin proyecto)") + " · " + (f.estacion_real || f.estacion_plan || "") + " · " + (f.subtarea_real || f.subtarea_plan || "") + " (" + h + "h)";
+            }).join(" | ");
+            [pj.v, tk.tareas].forEach(v => { if (/^REVISAR/.test(v)) rev.add(v); });
+            filas.push([...base, DATOS_UBIC, pj.v, "", tk.pv, "", tk.tareas, desc, "", "", "", notas.join(" · ")]);
+          } else if (fer && !todas.length) {
+            ausRow("Ausente", "Licencia", "Feriado", "Feriado - "+(fer.nombre||""), "");
+          } else if (todas.length) {   // solo filas marcadas ausente en el Detalle diario
+            const n = dispo.find(x => x.persona_id === p.id && fecha >= x.desde && fecha <= x.hasta);
+            const m = n && DATOS_AUS[n.tipo];
+            if (m) ausRow("Ausente", "Licencia", m.tareas, m.desc, "");
+            else { rev.add("ausente sin motivo"); ausRow("Ausente", "Licencia", "Ausencia Justificada", "Ausencia justificada", "REVISAR: marcado ausente sin motivo en No disponibilidad"); }
+          } else {
+            const n = dispo.find(x => x.persona_id === p.id && fecha >= x.desde && fecha <= x.hasta);
+            if (n && n.tipo === "Día de descanso post montaje") ausRow("Descanso", "Descanso", "Descanso", "Descanso post montaje", "propuesto (descanso)");
+            else if (n && DATOS_AUS[n.tipo]) ausRow("Ausente", "Licencia", DATOS_AUS[n.tipo].tareas, DATOS_AUS[n.tipo].desc, "");
+            else if (n) { rev.add("tipo "+n.tipo); ausRow("Ausente", "Licencia", "REVISAR: "+n.tipo, n.tipo, "REVISAR: tipo de no disponibilidad sin equivalente"); }
+            else {
+              const lab = (dow >= 1 && dow <= 5);
+              if (lab) sinPlan++;
+              filas.push([...base, "", "", "", "", "", "", "", "", "", "", lab ? "SIN PLANIFICAR" : ""]);
+            }
+          }
+        });
+      }
+      return { filas, resumen:{ personas:gente.length, dias:ult, sinPlan, multi, revisar:[...rev] } };
+    }
+    function datosCelda(v){ return v==null ? "" : String(v).replace(/[\t\r\n]+/g," "); }
+    function datosCopiarViejo(texto, ok){
+      const ta = document.createElement("textarea"); ta.value = texto; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy"); ok(); } catch(e) { setEstado("No se pudo copiar. Usá «Descargar CSV».","err"); }
+      document.body.removeChild(ta);
+    }
+    function datosCopiar(){
+      const r = datosFilasMes(datosMes); if (!r) return setEstado("Elegí un mes.","err");
+      const tsv = r.filas.map(f => f.slice(0,15).map(datosCelda).join("\t")).join("\r\n");   // sin encabezado ni Control: A:O
+      const ok = () => setEstado("✓ "+r.filas.length+" fila(s) copiadas (columnas A:O, sin encabezado). Pegalas en el Excel.","ok");
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(tsv).then(ok).catch(()=>datosCopiarViejo(tsv, ok));
+      else datosCopiarViejo(tsv, ok);
+    }
+    function datosCSV(){
+      const r = datosFilasMes(datosMes); if (!r) return setEstado("Elegí un mes.","err");
+      const esc = v => '"'+datosCelda(v).replace(/"/g,'""')+'"';
+      const csv = "﻿" + DATOS_CAB.map(esc).join(";") + "\r\n" + r.filas.map(f => f.map(esc).join(";")).join("\r\n");   // BOM para acentos en Excel
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([csv], {type:"text/csv;charset=utf-8;"}));
+      a.download = "datos_planificacion_"+datosMes.replace("-","")+".csv";
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setEstado("✓ CSV generado ("+r.filas.length+" filas).","ok");
+    }
+    function datosPreview(det){
+      if (!det.open) return;
+      const box = det.querySelector(".datos-prev"); const r = datosFilasMes(datosMes); if (!box || !r) return;
+      let t = '<table style="font-size:11px;border-collapse:collapse;white-space:nowrap"><thead><tr>'+DATOS_CAB.map(c=>'<th style="text-align:left;padding:3px 6px;background:#F1EFE8;position:sticky;top:0">'+escT(c)+'</th>').join("")+'</tr></thead><tbody>';
+      r.filas.forEach(f => { const rojo = /REVISAR|SIN PLANIFICAR/.test(f[15]||""); t += '<tr style="border-top:1px solid #F1EFE8'+(rojo?';background:#FCEBEB':'')+'">'+f.map(v=>'<td style="padding:2px 6px;max-width:260px;overflow:hidden;text-overflow:ellipsis">'+escT(v)+'</td>').join("")+'</tr>'; });
+      box.innerHTML = t+'</tbody></table>';
+    }
+    function datosPanelHtml(){
+      if (!datosMes) datosMes = hoyISO().slice(0,7);
+      const r = datosFilasMes(datosMes);
+      let res = '';
+      if (r) {
+        const R = r.resumen;
+        res = '<div style="font-size:12px;color:#5F5E5A;margin-top:8px">'+r.filas.length+' fila(s) · '+R.personas+' persona(s) × '+R.dias+' días'
+          + (R.sinPlan ? ' · <b style="color:#A32D2D">'+R.sinPlan+' día(s) hábil(es) SIN PLANIFICAR</b> (quedan vacíos)' : ' · sin días hábiles vacíos')
+          + (R.multi ? ' · '+R.multi+' día(s) con varias tareas' : '')
+          + (R.revisar.length ? '<br><b style="color:#A32D2D">REVISAR:</b> '+R.revisar.map(escT).join(', ') : '')
+          + '</div>'
+          + '<details ontoggle="datosPreview(this)" style="margin-top:6px"><summary style="font-size:12px;color:#185FA5;cursor:pointer">Ver vista previa</summary><div class="datos-prev" style="max-height:340px;overflow:auto;margin-top:6px"></div></details>';
+      }
+      return '<div class="no-print" style="border:1px solid #E6E4DC;border-radius:12px;padding:12px 14px;margin-bottom:12px;background:#FCFBF8">'
+        + '<div style="font-size:13px;font-weight:600;margin-bottom:4px">📋 Exportar para la planilla de M.O. (formato DATOS)</div>'
+        + '<p style="font-size:11.5px;color:#A8A69E;margin:0 0 8px">Una fila por persona y día del mes, con las columnas del modelo (Legajo … Ausente). «Copiar» deja las columnas A:O listas para pegar; la columna «Control» es solo para revisar acá. Ubicación: siempre Huella 610. Los días sin planificación quedan vacíos.</p>'
+        + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'
+        + '<input type="month" value="'+datosMes+'" onchange="datosMes=this.value;renderDetalle()" style="width:auto">'
+        + '<button class="btn btn-sec btn-sm" onclick="datosCopiar()">Copiar para Excel</button>'
+        + '<button class="btn btn-sec btn-sm" onclick="datosCSV()">Descargar CSV</button></div>'
+        + res + '</div>';
+    }
+
     function renderDetalle() {
       if (detalle.length === 0) { contenido.innerHTML = '<p style="font-size:13px;color:#888780">Todavía no hay detalle. Andá a Planificación General, completá la asignación y tocá "Generar detalle diario".</p>'; return; }
       const hoy = fechaStr(new Date());
@@ -3724,6 +3910,7 @@
       h += '<label style="font-size:12px;color:#888780;display:flex;align-items:center;gap:5px;margin-left:auto"><input type="checkbox" '+(detalleVerTodo?'checked':'')+' onchange="detalleVerTodo=this.checked;renderDetalle()" style="width:auto">Ver todo el historial</label>';
       if (ocultas > 0 && !detalleVerTodo) h += '<span style="font-size:11.5px;color:#A8A69E;width:100%">'+ocultas+' registro(s) más antiguos ocultos. Cambiá la fecha o tildá "Ver todo" para consultarlos.</span>';
       h += '</div>';
+      h += datosPanelHtml();
       h += '<div class="no-print" style="display:flex;justify-content:flex-end;margin-bottom:10px">'+botonesExport("detalle-print","detalle-diario")+'</div>';
       h += '<div id="detalle-print">';
       const conf = Object.entries(horasDia).filter(([,v])=>v>8);
