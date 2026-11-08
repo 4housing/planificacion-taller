@@ -201,6 +201,7 @@
           { id:"parte", label:"Parte diario", c:"#D9F0E6" },
           { id:"informe", label:"Informe de cierre", c:"#F7ECDA" },
           { id:"costos", label:"Tablero", c:"#EDE9F6" },
+          { id:"costomo", label:"Costo MO mensual", c:"#E3F1EC" },
           { id:"traslados", label:"Traslados", c:"#F5E9F7" },
           { id:"hue_actividad", label:"Actividad", c:"#EDEBE4", esAdmin:true }
         ]
@@ -596,6 +597,7 @@
         else if (tab === "parte") renderParte();
         else if (tab === "informe") renderInforme();
         else if (tab === "costos") renderTablero();
+        else if (tab === "costomo") renderCostoMO();
       }
     }
 
@@ -3877,6 +3879,180 @@
         + res + '</div>';
     }
 
+    // ====== COSTO MO MENSUAL (informe PROVISORIO de mano de obra de Operarios) ======
+    // Horas por persona, día y tarea según la planificación (Detalle diario), valorizadas con el valor hora del mes
+    // (si el mes no tiene valor cargado se usa el del último mes cargado = valor de REFERENCIA, ver valorHoraMes).
+    // Es una ESTIMACIÓN: el costo real se cierra con la liquidación de sueldos (módulo RRHH). Solo lectura.
+    //
+    // Reglas de horas (definidas por administración):
+    //  1) Jornada = 8 hs por persona y día hábil.
+    //  2) Si la persona tiene estación asignada, esa tiene prioridad. Si las estaciones suman más de 8 hs
+    //     (solapamiento), se escalan proporcionalmente a 8 y el día queda marcado para revisar.
+    //  3) La supervisión recibe el resto del día: 6 hs de estación + supervisión = 6 en la estación y 2 en supervisión.
+    //     Solo supervisión = todo el día (hasta lo que tenga cargado). Estación de 8 hs = supervisión 0.
+    //  4) Horas hábiles sin tarea = "Sin asignar"; días hábiles sin ninguna fila = "Sin planificar". Ambos se pagan igual.
+    //  5) Vacaciones se cuentan por días corridos (incluye sábados y domingos); feriado = 8 hs; el resto de las
+    //     licencias solo en días hábiles (estoy suponiendo: confirmar con las horas liquidadas por tipo).
+    //  6) Sábados/domingos trabajados: se informan los días y las horas, pero SIN costo: se imputan por lo liquidado
+    //     (Sábado Taller / extras OC) al cierre del mes. Extras de lunes a viernes: valor hora × 1,5 (estimado).
+    const CMO_JORNADA = 8;
+    let costoMoMes = null;
+    function costoMoMesDefault(){
+      const h = hoyISO(); const y = Number(h.slice(0,4)), m = Number(h.slice(5,7)), d = Number(h.slice(8,10));
+      if (d > 10) return h.slice(0,7);                       // pasados los primeros días se mira el mes en curso
+      const a = new Date(y, m-2, 1);                          // si no, el mes que recién cerró
+      return a.getFullYear()+"-"+String(a.getMonth()+1).padStart(2,"0");
+    }
+    const CMO_AUS = { "Vacaciones":"Vacaciones", "ART":"Licencia ART", "Parte médico":"Licencia por enfermedad",
+                      "Licencia":"Licencias justificadas", "Día de descanso post montaje":"Descanso post montaje" };
+
+    function costoMoCalcular(mes){
+      if (!/^\d{4}-\d{2}$/.test(mes||"")) return null;
+      const [Y, M] = mes.split("-").map(Number);
+      const ult = new Date(Y, M, 0).getDate();
+      const ini = mes+"-01", fin = mes+"-"+String(ult).padStart(2,"0");
+      const enMes = detalle.filter(f => f.fecha >= ini && f.fecha <= fin);
+      const gente = personasHuella().filter(p => p.tipo === "Directo" && (
+          enMes.some(f => f.persona_real === p.id) || dispo.some(n => n.persona_id === p.id && n.desde <= fin && n.hasta >= ini)
+        )).sort((a,b)=> (parseInt(a.legajo)||9999)-(parseInt(b.legajo)||9999));
+      const porPD = {};
+      enMes.forEach(f => { (porPD[f.persona_real+"|"+f.fecha] = porPD[f.persona_real+"|"+f.fecha] || []).push(f); });
+      const dest = {}, pers = {}, det = [];
+      const av = { solapes:[], sinValor:[], referencia:[], sinPlan:0, sabados:0 };
+      const hn = f => Number(f.horas_normales)||0, he = f => Number(f.horas_extra)||0;
+
+      gente.forEach(p => {
+        const v = valorHoraMes(p.id, mes) || 0;
+        const ref = !mesTieneValor(p.id, mes);
+        const P = pers[p.id] = { leg: Number(p.legajo)||p.legajo, nombre: p.nombre, v, ref, hProy:0, hAus:0, hSin:0, sab:0, hSab:0, costo:0, solapes:0 };
+        if (!v) av.sinValor.push(p.nombre); else if (ref) av.referencia.push(p.nombre);
+        // suma horas/costo a un destino (línea del informe) y deja el renglón de detalle para auditar
+        const add = (key, tipo, nombre, fecha, horas, costo, nota, esSab) => {
+          const D = dest[key] = dest[key] || { tipo, nombre, horas:0, costo:0, hSab:0, pers:new Set() };
+          if (esSab) D.hSab += horas; else { D.horas += horas; D.costo += costo; }
+          D.pers.add(p.id);
+          if (!esSab) { P.costo += costo; if (tipo === "proyecto" || tipo === "interno") P.hProy += horas; else if (tipo === "sinplan") P.hSin += horas; else P.hAus += horas; }
+          else P.hSab += horas;
+          det.push([P.leg, p.nombre, fecha, nombre, tipo, Math.round(horas*100)/100, v, esSab ? "" : Math.round(costo), nota||""]);
+        };
+        for (let d = 1; d <= ult; d++) {
+          const fecha = mes+"-"+String(d).padStart(2,"0");
+          const dow = new Date(fecha+"T12:00:00").getDay();
+          const finde = (dow === 0 || dow === 6);
+          const fer = feriados.find(h => h.fecha === fecha && !h.se_trabaja);
+          const todas = porPD[p.id+"|"+fecha] || [];
+          const trab = todas.filter(f => !f.ausente);
+          if (trab.length) {
+            const est = trab.filter(f => f.estacion_real !== SUP_MARK), sup = trab.filter(f => f.estacion_real === SUP_MARK);
+            const hEst = est.reduce((a,f)=>a+hn(f),0);
+            let k = 1;
+            if (!finde && hEst > CMO_JORNADA + 0.001) { k = CMO_JORNADA / hEst; P.solapes++; av.solapes.push({ nombre:p.nombre, fecha, h:hEst }); }
+            const dispSup = Math.max(0, CMO_JORNADA - Math.min(hEst, CMO_JORNADA));
+            const hSupTot = sup.reduce((a,f)=>a+hn(f),0);
+            const kSup = hSupTot > 0 ? Math.min(1, dispSup / hSupTot) : 0;
+            let imp = 0;
+            const filasImp = est.map(f => ({ f, h: finde ? hn(f) : hn(f)*k, esSup:false })).concat(sup.map(f => ({ f, h: finde ? hn(f) : hn(f)*kSup, esSup:true })));
+            filasImp.forEach(({ f, h, esSup }) => {
+              const pr = proyectos.find(x => x.id === f.proyecto_id);
+              const estK = f.estacion_real || f.estacion_plan || "";
+              const pj = datosProyecto(pr, esSup ? SUP_MARK : estK);
+              const interno = datosEsInterno(pr);
+              const key = interno ? "i:"+pj.v : "p:"+(f.proyecto_id||"?");
+              const tipo = interno ? "interno" : "proyecto";
+              const extra = he(f);
+              if (finde) { add(key, tipo, pj.v, fecha, h + extra, 0, "fin de semana: costo = lo liquidado", true); return; }
+              imp += h;
+              if (h > 0 || extra > 0) {
+                add(key, tipo, pj.v, fecha, h, h*v, esSup ? "supervisión" : (k < 1 ? "escalado a 8 hs (solapamiento)" : ""));
+                if (extra > 0) add(key, tipo, pj.v, fecha, extra, extra*v*1.5, "extra 50% (estimado)");
+              }
+            });
+            if (finde) { P.sab++; av.sabados++; }
+            else if (imp < CMO_JORNADA - 0.001) add("s:asignar", "sinplan", "Sin asignar (horas pagas sin tarea)", fecha, CMO_JORNADA - imp, (CMO_JORNADA - imp)*v, "");
+          } else if (fer && !finde) {
+            add("a:Feriado", "ausencia", "Feriado", fecha, CMO_JORNADA, CMO_JORNADA*v, fer.nombre||"");
+          } else {
+            const n = dispo.find(x => x.persona_id === p.id && fecha >= x.desde && fecha <= x.hasta);
+            if (n) {
+              const lbl = CMO_AUS[n.tipo] || ("Otras ausencias ("+n.tipo+")");
+              if (n.tipo === "Vacaciones" || !finde) add("a:"+lbl, "ausencia", lbl, fecha, CMO_JORNADA, CMO_JORNADA*v, finde ? "fin de semana dentro de las vacaciones (se paga)" : "");
+            } else if (todas.length) {
+              if (!finde) add("a:Ausente sin motivo", "ausencia", "Ausente sin motivo cargado", fecha, CMO_JORNADA, CMO_JORNADA*v, "revisar");
+            } else if (!finde) {
+              av.sinPlan++;
+              add("s:sinplan", "sinplan", "Sin planificar (día hábil sin filas)", fecha, CMO_JORNADA, CMO_JORNADA*v, "");
+            }
+          }
+        }
+      });
+      const lista = Object.entries(dest).map(([k,v]) => ({ k, ...v, pers: v.pers.size }));
+      const tot = { horas: lista.reduce((a,x)=>a+x.horas,0), costo: lista.reduce((a,x)=>a+x.costo,0), hSab: lista.reduce((a,x)=>a+x.hSab,0) };
+      return { lista, pers: Object.values(pers), det, av, tot, mes };
+    }
+
+    function costoMoDescargar(){
+      const r = costoMoCalcular(costoMoMes); if (!r) return setEstado("Elegí un mes.","err");
+      const esc = v => '"'+datosCelda(v).replace(/"/g,'""')+'"';
+      const cab = ["Legajo","Empleado","Fecha","Destino","Tipo","Horas","Valor hora usado","Costo estimado","Nota"];
+      const csv = "﻿" + cab.map(esc).join(";") + "\r\n" + r.det.map(f => f.map(esc).join(";")).join("\r\n");
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([csv], {type:"text/csv;charset=utf-8;"}));
+      a.download = "costo_mo_detalle_"+costoMoMes.replace("-","")+".csv";
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setEstado("✓ Detalle descargado ("+r.det.length+" renglones).","ok");
+    }
+
+    function renderCostoMO(){
+      if (!costoMoMes) costoMoMes = costoMoMesDefault();
+      const r = costoMoCalcular(costoMoMes);
+      const th = (t, al) => '<th style="text-align:'+(al||"left")+';padding:7px 10px;background:#F1EFE8">'+t+'</th>';
+      const td = (t, al, st) => '<td style="text-align:'+(al||"left")+';padding:6px 10px;'+(st||"")+'">'+t+'</td>';
+      const hh = n => (Math.round(n*10)/10).toLocaleString("es-AR");
+      let h = '<p style="font-size:13px;color:#888780;margin-top:0">Costo de mano de obra de <b>Operarios</b> por destino, armado solo con la planificación (Detalle diario) y el valor hora del mes. '
+            + '<b>Es una estimación provisoria</b>: el costo real se cierra con la liquidación de sueldos.</p>';
+      h += '<div class="no-print" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">'
+         + '<input type="month" value="'+costoMoMes+'" onchange="costoMoMes=this.value;renderCostoMO()" style="width:auto">'
+         + '<button class="btn btn-sec btn-sm" onclick="costoMoDescargar()">Descargar detalle (CSV)</button></div>';
+      if (!r || !r.pers.length) { contenido.innerHTML = h + '<div class="estado cargando">No hay detalle diario ni ausencias cargadas para ese mes.</div>'; return; }
+      const A = r.av;
+      // avisos
+      const avs = [];
+      if (A.sinValor.length) avs.push('<b style="color:#A32D2D">Sin valor hora (cuentan $0):</b> '+A.sinValor.map(escT).join(", "));
+      if (A.referencia.length) avs.push('<b>Valor de referencia</b> (el mes no tiene valor propio; se usó el último cargado): '+A.referencia.length+' persona(s)');
+      if (A.solapes.length) avs.push('<b style="color:#A32D2D">'+A.solapes.length+' día(s) con solapamiento (&gt; 8 hs en estaciones)</b>, escalados a 8 hs: '+A.solapes.slice(0,6).map(s=>escT(s.nombre)+' '+dm(s.fecha)+' ('+hh(s.h)+' hs)').join(" · ")+(A.solapes.length>6?" …":""));
+      if (A.sinPlan) avs.push('<b style="color:#A32D2D">'+A.sinPlan+' día(s) hábil(es) sin planificar</b> (se pagan igual: figuran en «Sin planificar»)');
+      if (A.sabados) avs.push(A.sabados+' día(s) de fin de semana trabajados ('+hh(r.tot.hSab)+' hs): <b>sin costo</b> acá, se imputan por lo liquidado (Sábado Taller / extras OC)');
+      if (avs.length) h += '<div class="estado cargando" style="margin-bottom:12px;line-height:1.7">'+avs.map(x=>'• '+x).join("<br>")+'</div>';
+      // resumen por destino
+      const orden = { proyecto:0, interno:1, ausencia:2, sinplan:3 };
+      const rot = { proyecto:"Proyecto", interno:"Centro de costo interno", ausencia:"Ausencia (se paga)", sinplan:"Sin tarea" };
+      const L = r.lista.slice().sort((a,b)=> (orden[a.tipo]-orden[b.tipo]) || (b.costo-a.costo));
+      h += '<div style="font-size:14px;font-weight:600;margin:8px 0">Costo estimado por destino — '+nombreMes(costoMoMes)+'</div>';
+      h += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr>'
+         + th("Destino")+th("Tipo")+th("Horas","right")+th("Costo estimado","right")+th("% del total","right")+th("Personas","right")+'</tr></thead><tbody>';
+      L.forEach(x => {
+        h += '<tr style="border-top:1px solid #F1EFE8">'+td(escT(x.nombre))+td(rot[x.tipo],"left","color:#888780")+td(hh(x.horas),"right")
+           + td(fmtPlata(x.costo),"right","font-variant-numeric:tabular-nums")+td((r.tot.costo? (100*x.costo/r.tot.costo).toFixed(1):"0")+"%","right")+td(x.pers,"right")+'</tr>';
+      });
+      h += '<tr style="border-top:2px solid #E6E4DC;font-weight:600">'+td("TOTAL")+td("")+td(hh(r.tot.horas),"right")+td(fmtPlata(r.tot.costo),"right")+td("100%","right")+td(r.pers.length,"right")+'</tr>';
+      h += '</tbody></table></div>';
+      // por persona
+      h += '<div style="font-size:14px;font-weight:600;margin:18px 0 8px">Por persona</div>';
+      h += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr>'
+         + th("Legajo")+th("Nombre")+th("Valor hora","right")+th("Hs a proyectos/centros","right")+th("Hs ausencia","right")+th("Hs sin tarea","right")+th("Sáb/dom (días)","right")+th("Costo estimado","right")+'</tr></thead><tbody>';
+      r.pers.slice().sort((a,b)=>(Number(a.leg)||0)-(Number(b.leg)||0)).forEach(P => {
+        h += '<tr style="border-top:1px solid #F1EFE8">'+td(P.leg)+td(escT(P.nombre))
+           + td(P.v ? fmtPlata(P.v)+(P.ref?' <span title="valor de referencia: el mes no tiene valor propio" style="color:#BA7517">ref</span>':'') : '<span style="color:#A32D2D">sin valor</span>',"right")
+           + td(hh(P.hProy),"right")+td(hh(P.hAus),"right")+td(hh(P.hSin),"right",P.hSin>0?"color:#A32D2D":"")+td(P.sab||"","right")
+           + td(fmtPlata(P.costo),"right","font-variant-numeric:tabular-nums")+'</tr>';
+      });
+      h += '</tbody></table></div>';
+      h += '<p style="font-size:11.5px;color:#A8A69E;line-height:1.6;margin-top:10px"><b>Cómo se calcula:</b> jornada de 8 hs; la estación asignada tiene prioridad y la supervisión recibe el resto del día; si las estaciones suman más de 8 hs se escalan a 8. '
+         + 'Costo = horas × valor hora del mes (o del último mes cargado). Extras de lunes a viernes × 1,5. Vacaciones por días corridos (con fines de semana); feriado 8 hs; otras licencias solo en días hábiles. '
+         + 'Los fines de semana trabajados no llevan costo acá. Todo es estimado y se reemplaza por lo liquidado al cierre del mes.</p>';
+      contenido.innerHTML = h;
+    }
+
     function renderDetalle() {
       if (detalle.length === 0) { contenido.innerHTML = '<p style="font-size:13px;color:#888780">Todavía no hay detalle. Andá a Planificación General, completá la asignación y tocá "Generar detalle diario".</p>'; return; }
       const hoy = fechaStr(new Date());
@@ -6436,7 +6612,7 @@
     // Catálogo de secciones controlables (coincide con el del panel del portal).
     // Neuquén se maneja como una sección única ('neuquen'); Actividad sigue siendo
     // admin-only por separado.
-    const SECCIONES_PLAN = ["dash","proyectos","personal","dispo","feriados","plani","detalle","gantt","histo","parte","informe","costos","traslados","actividad","neuquen"];
+    const SECCIONES_PLAN = ["dash","proyectos","personal","dispo","feriados","plani","detalle","gantt","histo","parte","informe","costos","costomo","traslados","actividad","neuquen"];
     // Secciones con edición real (donde tiene sentido el cartel "solo lectura").
     const SECCIONES_EDITABLES = new Set(["proyectos","personal","dispo","feriados","plani","detalle","traslados","neuquen"]);
     // Mapea un id de pestaña (incluye las nqn_*) a su sección del catálogo.
@@ -6452,7 +6628,7 @@
       if (miPerfil.esDir) return null;
       if (Array.isArray(miPerfil.ver)) return new Set(miPerfil.ver);
       const s = new Set(SECCIONES_PLAN);
-      if (miPerfil.ve_sueldos !== true) { s.delete("personal"); s.delete("traslados"); }
+      if (miPerfil.ve_sueldos !== true) { s.delete("personal"); s.delete("traslados"); s.delete("costomo"); }
       if (miPerfil.ve_neuquen === false) s.delete("neuquen");
       return s;
     }
