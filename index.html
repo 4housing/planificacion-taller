@@ -221,7 +221,7 @@
           { id:"nqn_parte", label:"Parte diario", c:"#D9F0E6" },
           { id:"nqn_stock", label:"Stock", c:"#FAEEDA" },
           { id:"nqn_informe", label:"Informe por período", c:"#F7ECDA" },
-          { id:"nqn_costos", label:"Tablero", c:"#EDE9F6" },
+          { id:"nqn_costos", label:"Tablero", c:"#EDE9F6", soloSueldos:true },
           { id:"nqn_personal", label:"Personal", c:"#FBEAF0" },
           { id:"personal", label:"Personal y tarifas", c:"#FAEEDA" },
           { id:"nqn_actividad", label:"Actividad", c:"#EDEBE4", esAdmin:true }
@@ -236,7 +236,7 @@
       const admin = (typeof esAdmin === "function") ? esAdmin() : false;
       if (bar) bar.innerHTML = conf.tabs.map(t => {
         // Visión por sección + Actividad sigue siendo admin-only.
-        const oculta = !puedeVerSeccion(seccionDeTab(t.id)) || (t.esAdmin && !admin);
+        const oculta = !puedeVerSeccion(seccionDeTab(t.id)) || (t.esAdmin && !admin) || (t.soloSueldos && !puedeVerSueldos());
         return '<button class="tab'+(t.id===tab?' active':'')+'" id="tab-'+t.id+'" onclick="cambiarTab(\''+t.id+'\')" style="--c:'+t.c+(oculta?';display:none':'')+'">'+t.label+'</button>';
       }).join("");
       const tit = document.getElementById("appTitulo"); if (tit) tit.textContent = conf.titulo;
@@ -467,6 +467,7 @@
         return;
       }
       if (tab === "nqn_costos") {
+        if (!puedeVerSueldos()) { contenido.innerHTML = '<p style="font-size:13px;color:#A8A69E">No tenés permiso para ver esta sección.</p>'; setEstado("Acceso restringido.", "cargando"); return; }
         await asegurarBase(); // personas, feriados (multiplicador de extras) e historial de valor-hora
         { const { data } = await sb.from("planificacion_trailers").select("*").eq("sede","neuquen"); trailers = (data||[]).sort((a,b)=> (a.codigo||"").localeCompare(b.codigo||"", "es", {numeric:true})); }
         { const { data, error } = await leerTodas(()=>sb.from("planificacion_detalle_diario").select("*").eq("sede","neuquen")); if (error) return errLoad(error); detalle = (data||[]).sort((a,b)=> a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0); }
@@ -5829,6 +5830,7 @@
     // universo: jornadas ya filtradas (directos, reales, sede y proyecto del Tablero).
     // filasPeriodo: las del período elegido arriba en el Tablero (null en Neuquén: no hay Tablero arriba).
     function cppCard(universo, filasPeriodo, opts){
+      if(!puedeVerSueldos()) return ''; // muestra valor-hora y costo por persona: solo con ve_sueldos
       const esNqn = !!(opts && opts.nqn);
       const modo = (esNqn || !filasPeriodo) ? "rango" : cppModo;
       cppRangoInicial();
