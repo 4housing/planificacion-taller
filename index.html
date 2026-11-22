@@ -3036,7 +3036,25 @@
       if(c==="fecha_desde" && b && fechaPrevia && v && v!==fechaPrevia){
         await ofrecerDesplazar(b, fechaPrevia, v);
       }
-      if(c==="fecha_desde"||c==="fecha_hasta"||c==="proyecto_id") renderPlani();
+      if(c==="fecha_desde"||c==="fecha_hasta"||c==="proyecto_id"){ await ofrecerHabilitarSabados(b); renderPlani(); }
+    }
+    // Si el rango de un bloque cae sobre un sábado que el proyecto NO tiene habilitado,
+    // ofrecer habilitarlo ahí mismo (si no, ese sábado queda mudo y no se genera). El sábado
+    // es independiente: no hace falta llenar el viernes ni estirar el bloque de la semana.
+    async function ofrecerHabilitarSabados(b){
+      if(!b || !b.proyecto_id || !b.fecha_desde || !b.fecha_hasta) return;
+      const pr = proyectos.find(p=>p.id===b.proyecto_id);
+      if(pr && pr.sabados_todos) return; // ya se trabajan todos los sábados
+      const faltan = [];
+      let d = new Date(b.fecha_desde+"T12:00:00"); const e = new Date(b.fecha_hasta+"T12:00:00");
+      while(d<=e){ if(d.getDay()===6){ const f=fechaStr(d); if(!esSabadoHabil(b.proyecto_id, f)) faltan.push(f); } d = new Date(d.getTime()+86400000); }
+      if(!faltan.length) return;
+      const lista = faltan.map(f=>dmy(f)).join(", ");
+      if(!confirm("Este bloque incluye el/los sábado(s) "+lista+", que todavía NO están habilitados para trabajar en el proyecto «"+(pr?pr.nombre:"—")+"».\n\nSi no los habilitás, esos sábados NO se generan en el detalle (el bloque queda mudo esos días).\n\n¿Habilitar ese(os) sábado(s) para este proyecto?")) return;
+      const { error } = await sb.from("planificacion_proyecto_sabados").insert(faltan.map(f=>({proyecto_id:b.proyecto_id, fecha:f})));
+      if(error) return setEstado("Error al habilitar sábados: "+error.message, "err");
+      proyectoSabados[b.proyecto_id] = proyectoSabados[b.proyecto_id] || new Set(); faltan.forEach(f=>proyectoSabados[b.proyecto_id].add(f));
+      setEstado("✓ Sábado(s) habilitado(s): "+lista+". Acordáte de regenerar o usar «Rellenar un día suelto» para que aparezcan en el Parte.", "ok");
     }
     // Desplaza los bloques futuros de las mismas personas, en días hábiles, según el corrimiento del inicio.
     async function ofrecerDesplazar(bloque, inicioPrevio, inicioNuevo){
