@@ -1349,10 +1349,11 @@
       ids.forEach(id=>{ const pr=proyectos.find(p=>p.id===id); resumen += "\n• "+(pr?pr.nombre:id)+":\n"; Object.keys(draftPr[id]).forEach(c=>{ if(c==='_sabados'){ const s=draftPr[id]._sabados; resumen += "   - Sábados → "+(s.todos?"Todos":(s.fechas&&s.fechas.length? s.fechas.length+" fecha(s)":"Ninguno"))+"\n"; return; } resumen += "   - "+(ETIQ[c]||c)+" → "+(draftPr[id][c]===null||draftPr[id][c]===""?"(vacío)":draftPr[id][c])+"\n"; }); });
       resumen += "\n¿Confirmás guardar estos cambios?";
       if(!confirm(resumen)) return;
-      let guardados=0;
+      let guardados=0; let tocoSabados=false;
       for(const id of ids){
         const draft = Object.assign({}, draftPr[id]);
         const sab = draft._sabados; delete draft._sabados;
+        if(sab) tocoSabados=true;
         if(sab) draft.sabados_todos = !!sab.todos; // la columna del proyecto
         if(Object.keys(draft).length){
           const { error } = await sb.from("planificacion_proyectos").update(draft).eq("id", id);
@@ -1369,7 +1370,7 @@
         delete draftPr[id]; delete sabadosModoUI[id]; guardados++;
       }
       renderProyectos();
-      setEstado("\u2713 "+guardados+" proyecto(s) guardado(s).","ok");
+      setEstado("\u2713 "+guardados+" proyecto(s) guardado(s)."+(tocoSabados?" Cambiaste s\u00e1bados: para que impacten en el Parte, reges\u00e9 el detalle (o rellen\u00e1 esos d\u00edas) \u2014 y record\u00e1 que cada persona trabaja el s\u00e1bado solo si su bloque llega hasta esa fecha.":""),"ok");
     }
     // --- MÓDULOS ---
     function modulosDe(pr){ return (pr && pr.modulos ? String(pr.modulos) : "").split(",").map(s=>s.trim()).filter(Boolean); }
@@ -2315,7 +2316,7 @@
       contenido.innerHTML=h;
     }
     async function agregarFer(){ const t=fechaStr(new Date()); const{error}=await sb.from("planificacion_feriados").insert({fecha:t,nombre:"Nuevo feriado",se_trabaja:false}); if(error)return setEstado("Error: "+error.message,"err"); cargar(); }
-    async function editarFer(id,c,v){ const u={};u[c]=v; const{error}=await sb.from("planificacion_feriados").update(u).eq("id",id); if(error)return setEstado("Error: "+error.message,"err"); const f=feriados.find(x=>x.id===id); if(f)f[c]=v; setEstado("\u2713 Guardado.","ok"); renderFeriados(); }
+    async function editarFer(id,c,v){ const u={};u[c]=v; const{error}=await sb.from("planificacion_feriados").update(u).eq("id",id); if(error)return setEstado("Error: "+error.message,"err"); const f=feriados.find(x=>x.id===id); if(f)f[c]=v; if(c==='se_trabaja'){ setEstado("\u2713 Guardado. Ojo: el detalle diario es una foto \u2014 para que el "+(f?dmy(f.fecha):"d\u00eda")+" aparezca en el Parte, reges\u00e9 el detalle o us\u00e1 \u00abRellenar un d\u00eda suelto\u00bb en Detalle diario.","ok"); } else { setEstado("\u2713 Guardado.","ok"); } renderFeriados(); }
     async function eliminarFer(id){
       const f = feriados.find(x=>x.id===id);
       let desc = "este feriado";
@@ -2946,6 +2947,7 @@
       h += '<button class="btn btn-primary" style="background:'+(val.ok?'#185FA5':'#A8A69E')+';cursor:'+(val.ok?'pointer':'not-allowed')+'" '+(val.ok?'':'disabled')+' onclick="generarDetalle()">Generar detalle diario →</button>';
       h += '<button class="btn" title="Uso excepcional: rellena el detalle de UN día puntual que quedó sin generar (p. ej. un día pasado). No toca lo ya cargado." style="background:#fff;border:1px solid #BA7517;color:#BA7517;padding:6px 12px" onclick="generarDetalleFecha()">🩹 Rellenar un día suelto…</button>';
       h += '</div>';
+      h += '<p style="font-size:11.5px;color:#8A8880;margin:10px 0 0;max-width:720px;border-left:3px solid #E0C48A;padding-left:10px">El detalle diario es una <b>foto</b>: el Parte diario muestra lo que había al generarlo. Si después cambiás un <b>feriado a «Se trabaja»</b>, habilitás un <b>sábado</b> o estirás un <b>bloque</b>, ese día no aparece hasta que <b>regenerás</b> el detalle o usás <b>«Rellenar un día suelto»</b> para esa fecha.</p>';
       contenido.innerHTML = h;
       document.getElementById("selAgregar").onchange = function(){ if(this.value){ agregarEstacion(this.value); } };
       aplicarResaltadoPlani();
