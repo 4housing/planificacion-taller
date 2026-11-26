@@ -3322,11 +3322,7 @@
       let aviso = "";
       if (futConDatos.length > 0) aviso = "\n\nOJO: hay " + futConDatos.length + " registro(s) ya cargados de hoy en adelante que se regeneran y se pierden. (Los días extra no se tocan.)";
       if(invalidas.length) aviso += "\n\n" + invalidas.length + " tarea(s) quedan afuera por estar incompletas (sin trailer, fechas o personas).";
-      if(!confirm("Generar el detalle diario de Base Neuquén desde "+validas.length+" tarea(s) de mantenimiento, de hoy en adelante."+aviso+"\n\n¿Continuar?")){ setEstado("Generación cancelada.","cargando"); return; }
-      // borrar SOLO el detalle planificado de Neuquén de hoy en adelante; los días extra quedan.
-      const { error: eDel } = await sb.from("planificacion_detalle_diario").delete().eq("sede","neuquen").gte("fecha", hoy).or("es_extra.is.null,es_extra.eq.false");
-      if (eDel) return setEstado("Error al limpiar futuro: " + eDel.message, "err");
-      // generar filas nuevas de hoy en adelante
+      // Armar las filas ANTES de confirmar, para poder avisar si quedaría una sobreasignación.
       const filas = [];
       validas.forEach(t=>{
         const dias = diasHabiles(t.fecha_desde, t.fecha_hasta).filter(d=> d>=hoy);
@@ -3348,6 +3344,24 @@
           });
         }));
       });
+      // Detección de SOBREASIGNACIÓN sobre las filas a generar: una persona con más de 8h en
+      // un mismo día (p. ej. asignada a 2 trailers). Los contratistas no cuentan (recurso
+      // ilimitado), igual que en el aviso del Detalle diario. Si una persona falta, el plan ya
+      // la corre un día; acá avisamos antes de escribir para que uno no llegue a cargarla.
+      const horasGen = {};
+      filas.forEach(f=>{ const pp = personas.find(x=>x.id===f.persona_real); if(pp && pp.tipo==="Contratista") return; const k = f.persona_real+"|"+f.fecha; horasGen[k] = (horasGen[k]||0) + (Number(f.horas_normales)||0); });
+      const sobre = Object.entries(horasGen).filter(([,v])=>v>8).sort((a,b)=> a[0]<b[0]?-1:1).map(([k,v])=>{ const [pid,fe]=k.split("|"); return nombrePersona(pid)+" ("+dm(fe)+"): "+v+"h"; });
+      if (sobre.length){
+        const muestra = sobre.slice(0,12).join("\n• ") + (sobre.length>12 ? ("\n• …y "+(sobre.length-12)+" más") : "");
+        aviso += "\n\n⚠ SOBREASIGNACIÓN — estas personas quedarían con más de 8h en un día (no pueden estar en dos trailers a la vez):\n• " + muestra + "\n\nConviene corregirlo en la Planificación antes de generar.";
+      }
+      const preg = sobre.length
+        ? "Generar el detalle diario de Base Neuquén desde "+validas.length+" tarea(s) de mantenimiento, de hoy en adelante."+aviso+"\n\n¿Generar IGUAL, con esa sobreasignación?"
+        : "Generar el detalle diario de Base Neuquén desde "+validas.length+" tarea(s) de mantenimiento, de hoy en adelante."+aviso+"\n\n¿Continuar?";
+      if(!confirm(preg)){ setEstado(sobre.length?"Generación cancelada por sobreasignación. Corregila en Planificación.":"Generación cancelada.","cargando"); return; }
+      // borrar SOLO el detalle planificado de Neuquén de hoy en adelante; los días extra quedan.
+      const { error: eDel } = await sb.from("planificacion_detalle_diario").delete().eq("sede","neuquen").gte("fecha", hoy).or("es_extra.is.null,es_extra.eq.false");
+      if (eDel) return setEstado("Error al limpiar futuro: " + eDel.message, "err");
       if (filas.length > 0) {
         const { error: eIns } = await sb.from("planificacion_detalle_diario").insert(filas);
         if (eIns) return setEstado("Error al generar: " + eIns.message, "err");
