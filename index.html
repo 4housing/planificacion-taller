@@ -3550,7 +3550,9 @@
       const horasDia = {};
       // Los contratistas son recurso tercerizado e ilimitado: pueden estar en varias
       // tareas el mismo día sin que sea sobreasignación. No cuentan para el aviso.
-      detalle.forEach(f => { if (f.ausente) return; if (f.es_extra) return; const pp = personas.find(x => x.id === f.persona_real); if (pp && pp.tipo === "Contratista") return; const k = f.persona_real + "|" + f.fecha; horasDia[k] = (horasDia[k]||0) + (Number(f.horas_normales)||0); });
+      // Solo cuentan los días de HOY en adelante: una sobreasignación en el pasado ya no se
+      // puede corregir, así que mostrarla solo ensucia la vista (pedido Base Neuquén).
+      detalle.forEach(f => { if (f.ausente) return; if (f.es_extra) return; if (f.fecha < hoy) return; const pp = personas.find(x => x.id === f.persona_real); if (pp && pp.tipo === "Contratista") return; const k = f.persona_real + "|" + f.fecha; horasDia[k] = (horasDia[k]||0) + (Number(f.horas_normales)||0); });
 
       let h = '<p style="font-size:13px;color:#888780;margin-top:0">Registro real día por día de Base Neuquén. Editá lo que pasó: cargar horas trabajadas y extra, marcar ausencias. Los días anteriores a hoy son historia (🔒).</p>';
       h += '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;background:#FAFAF8;border:1px solid #EEECE4;border-radius:10px;padding:8px 12px">';
